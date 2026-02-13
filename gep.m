@@ -1,8 +1,11 @@
 function [L, U, P] = gep(A, droptol, thresh, udiag)
-%GEP    Gaussian elimination with pivoting:
 %       [L, U, P] = GEP(A, piv) computes the factorization P*A = L*U
 %       of the m-by-n matrix A, where m >= n,
 %       where L is m-by-n unit lower triangular, U is n-by-n upper triangular,
+%
+%       droptol : Drop tolerance of the incomplete LU factorization
+%       thresh : Pivot threshold
+%       udiag : Whether to replace zero diagonal entries of U
 %
 %       By itself, GEP(A) returns the final reduced matrix from the
 %       elimination containing both L and U.

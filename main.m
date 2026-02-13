@@ -1,8 +1,8 @@
 load("data/494_bus.mat")
 
 M = Problem.A;
-%{
 seuils = [0.2, 1e-1, 1e-2, 1e-3, 1e-4];
+%{
 
 for s = seuils
     setup.type = 'ilutp';
@@ -10,7 +10,7 @@ for s = seuils
     [L1, U1, P1] = ilu(M, setup);
     %[L2, U2, P2] = gep(M, s);
 
-    res = test_ilu(M,L1,U1);
+    res = test_ilu(M,L1,U1,P1);
     fprintf('Seuil: %.1e | Iter: %3d | Err. Rel: %.2e | Fill-in: %.2f | Flag: %d\n', ...
         s, res.iterations, res.relative_error, res.fill_in, res.flag);
 
@@ -22,6 +22,7 @@ legend;
 grid on;
 title('Influence de la précision du préconditionneur');
 hold off;
+%}
 
 % Courbe de compromis
 figure; % Nouvelle figure
@@ -33,8 +34,8 @@ for i = 1:length(droptols)
     setup.type = 'ilutp';
     setup.droptol = droptols(i);
     try
-        [L, U] = ilu(M, setup);
-        res = test_ilu(M, L, U);
+        [L, U, P] = ilu(M, setup);
+        res = test_ilu(M, L, U, P);
         iterations(i) = res.iterations;
         fill_ins(i) = res.fill_in;
     catch
@@ -63,7 +64,6 @@ semilogx(droptols_valid, fill_ins_valid, '-sr');
 ylabel('Facteur de remplissage (fill-in)');
 legend("Nombre d'itérations", 'Fill-in', 'Location', 'best');
 hold off;
-%}
 
 [res,s] = opti_dicho(M,0,10,1e-2);
 fprintf('\nSeuil: %.3e | Iter: %3d | Fill-in: %.2f | Flag: %d\n', ...
@@ -76,13 +76,12 @@ setup.type = 'ilutp';
 
 while abs(debut - fin) > precision
     mid = (debut + fin)/2;
-    fprintf("%f\n",mid);
 
     setup.droptol = 10^-debut;
     tic
-    [Ld, Ud] = ilu(A, setup);
+    [Ld, Ud, Pd] = ilu(A, setup);
     tpsd = toc;
-    resd = test_ilu(A, Ld, Ud);
+    resd = test_ilu(A, Ld, Ud, Pd);
     Jd = tpsd * resd.fill_in * resd.iterations;
     if resd.flag
         debut = debut + (fin+debut)*0.1;
@@ -91,16 +90,16 @@ while abs(debut - fin) > precision
 
     setup.droptol = 10^-mid;
     tic
-    [Lm, Um] = ilu(A, setup);
+    [Lm, Um, Pm] = ilu(A, setup);
     tpsm = toc;
-    resm = test_ilu(A, Lm, Um);
+    resm = test_ilu(A, Lm, Um, Pm);
     Jm = tpsm * resm.fill_in * resm.iterations;
 
     setup.droptol = 10^-fin;
     tic
-    [Lf, Uf] = ilu(A, setup);
+    [Lf, Uf, Pf] = ilu(A, setup);
     tpsf = toc;
-    resf = test_ilu(A, Lf, Uf);
+    resf = test_ilu(A, Lf, Uf, Pf);
     Jf = tpsf * resf.fill_in * resf.iterations;
 
     if Jm < Jd && Jm < Jf
@@ -121,3 +120,35 @@ while abs(debut - fin) > precision
     end
 end
 end
+
+resDouble = zeros(1, length(seuils));
+resSimple = zeros(1, length(seuils));
+i=1;
+for s = seuils
+    setup.type = 'ilutp';
+    setup.droptol = s;
+    [L1, U1, P] = ilu(M, setup);
+    L2 = single(L1);
+    U2 = single(U1);
+    res1 = test_ilu(M,L1,U1,P);
+    resDouble(i) = res1.iterations;
+        warning('off', 'all')
+    res2 = test_ilu(M,L2,U2,P);
+        warning('on', 'all')
+
+    resSimple(i) = res2.iterations;
+    i=i+1;
+
+end
+figure; 
+clf;
+semilogx(seuils, resDouble, 'o-', 'LineWidth', 1.5)
+hold on
+semilogx(seuils, resSimple, 's-', 'LineWidth', 1.5)
+hold off
+
+legend('Préconditionneur double', 'Préconditionneur simple')
+xlabel('droptol')
+ylabel('Nombre d''itérations')
+title('Influence de la précision du préconditionneur')
+grid on
