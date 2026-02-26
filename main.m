@@ -1,4 +1,4 @@
-load("data/494_bus.mat")
+load("data/tumorAntiAngiogenesis_8.mat")
 
 M = Problem.A;
 seuils = [0.2, 1e-1, 1e-2, 1e-3, 1e-4];
@@ -22,7 +22,6 @@ legend;
 grid on;
 title('Influence de la précision du préconditionneur');
 hold off;
-%}
 
 % Courbe de compromis
 figure; % Nouvelle figure
@@ -68,6 +67,7 @@ hold off;
 [res,s] = opti_dicho(M,0,10,1e-2);
 fprintf('\nSeuil: %.3e | Iter: %3d | Fill-in: %.2f | Flag: %d\n', ...
     s, res.iterations, res.fill_in, res.flag);
+%}
 
 function [results, seuil] = opti_dicho(A, debut, fin ,precision)
 setup.type = 'ilutp';
@@ -121,34 +121,112 @@ while abs(debut - fin) > precision
 end
 end
 
-resDouble = zeros(1, length(seuils));
-resSimple = zeros(1, length(seuils));
-i=1;
-for s = seuils
+function Ms = simuler_precision(M, type)
+% Extrait uniquement les éléments non-nuls pour ne pas remplir la matrice
+[i, j, v] = find(M);
+
+switch type
+    case 'single'
+        % Simule le 32-bit
+        v_new = double(single(v));
+    case 'fp16'
+        % Simule le format IEEE half-precision (16-bit)
+        opt.format = 'h';
+        v_new = chop(v, opt);
+    case 'bfloat16'
+        % Simule le format Google bfloat16 (16-bit, grand exposant)
+        opt.format = 'b';
+        v_new = chop(v, opt);
+    case 'double'
+        % Garde le 64-bit d'origine
+        v_new = v;
+    otherwise
+        error('Type de précision non reconnu');
+end
+
+% Reconstruit la matrice creuse
+Ms = sparse(i, j, v_new, size(M,1), size(M,2));
+end
+
+
+% Initialisation de la fonction chop
+chop([], struct('format', 'h')); % Initialise les paramètres internes
+
+seuils = logspace(-5, -1, 10);
+precisions = {'double', 'single', 'fp16', 'bfloat16'};
+
+% Tableaux pour stocker les résultats
+iters_map = zeros(length(precisions), length(seuils));
+rel_err_map = zeros(length(precisions), length(seuils));
+
+fprintf('Début de l''analyse multi-précision...\n');
+
+for i = 1:length(seuils)
+    s = seuils(i);
     setup.type = 'ilutp';
     setup.droptol = s;
-    [L1, U1, P] = ilu(M, setup);
-    L2 = single(L1);
-    U2 = single(U1);
-    res1 = test_ilu(M,L1,U1,P);
-    resDouble(i) = res1.iterations;
-        warning('off', 'all')
-    res2 = test_ilu(M,L2,U2,P);
-        warning('on', 'all')
+    setup.udiag = 1;
 
-    resSimple(i) = res2.iterations;
-    i=i+1;
+    % Factorisation en double précision
+    [L, U, P] = ilu(M, setup);
 
+    for j = 1:length(precisions)
+        p_type = precisions{j};
+
+        % Dégradation de L et U selon la précision choisie
+        L_mod = simuler_precision(L, p_type);
+        U_mod = simuler_precision(U, p_type);
+
+        % Test avec GMRES
+        warning('off', 'all'); % Désactive les alertes de convergence de GMRES
+        res = test_ilu(M, L_mod, U_mod, P);
+        warning('on', 'all');
+
+        iters_map(j, i) = res.iterations;
+        rel_err_map(j, i) = res.relative_error;
+    end
 end
-figure; 
-clf;
-semilogx(seuils, resDouble, 'o-', 'LineWidth', 1.5)
-hold on
-semilogx(seuils, resSimple, 's-', 'LineWidth', 1.5)
-hold off
 
-legend('Préconditionneur double', 'Préconditionneur simple')
-xlabel('droptol')
-ylabel('Nombre d''itérations')
-title('Influence de la précision du préconditionneur')
-grid on
+%% GRAPHIQUE 1 : Robustesse du nombre d'itérations selon la précision
+figure('Name', 'Itérations vs Précision');
+clf;
+couleurs = {'-ok', '-sb', '-^r', '-dg'};
+
+for j = 1:length(precisions)
+    semilogx(seuils, iters_map(j, :), couleurs{j}, 'LineWidth', 1.5, 'MarkerSize', 6);
+    hold on;
+end
+
+set(gca, 'XDir', 'reverse'); % Inverser l'axe X pour voir la tolérance la plus stricte à gauche
+grid on;
+legend('64-bit (Double)', '32-bit (Single)', '16-bit (FP16)', '16-bit (BFloat16)', 'Location', 'best');
+xlabel('Tolérance de chute (droptol)');
+ylabel('Nombre d''itérations de GMRES');
+title('Impact de la précision de stockage de ILU sur la convergence');
+hold off;
+
+%% GRAPHIQUE 2 : Profil de convergence pour un Seuil Spécifique (ex: droptol = 1e-3)
+s_cible = 1e-3;
+setup.droptol = s_cible;
+[L, U, P] = ilu(M, setup);
+
+figure('Name', 'Profil de Convergence (droptol = 1e-3)');
+clf;
+
+for j = 1:length(precisions)
+    p_type = precisions{j};
+    L_mod = simuler_precision(L, p_type);
+    U_mod = simuler_precision(U, p_type);
+
+    res = test_ilu(M, L_mod, U_mod, P);
+
+    semilogy(0:res.iterations, res.resvec / norm(M*ones(size(M,1),1)), couleurs{j}, 'LineWidth', 1.5);
+    hold on;
+end
+
+grid on;
+legend('64-bit (Double)', '32-bit (Single)', '16-bit (FP16)', '16-bit (BFloat16)', 'Location', 'northeast');
+xlabel('Numéro de l''itération GMRES');
+ylabel('Résidu Relatif');
+title(sprintf('Historique des résidus (droptol = %.1e)', s_cible));
+hold off;
