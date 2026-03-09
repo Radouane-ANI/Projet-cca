@@ -1,4 +1,4 @@
-load("data/tumorAntiAngiogenesis_8.mat")
+load("data/bcsstk08.mat")
 
 M = Problem.A;
 seuils = [0.2, 1e-1, 1e-2, 1e-3, 1e-4];
@@ -148,12 +148,61 @@ end
 Ms = sparse(i, j, v_new, size(M,1), size(M,2));
 end
 
+function [Ms, taille] = simuler_precision_optimale(M, tolerance)
+% Extraction des éléments non nuls
+[i, j, v] = find(M);
+n = length(v);
+if n == 0
+    Ms = M; taille = 0; return;
+end
+
+% Préparation des vecteurs de test
+% On calcule les approximations pour TOUS les éléments d'un coup
+v_bf16 = chop(v, struct('format', 'b'));
+v_fp16 = chop(v, struct('format', 'h'));
+v_single = double(single(v));
+
+% Calcul des erreurs relatives (vectorisé)
+% eps est ajouté au dénominateur pour éviter la division par zéro
+err_bf16 = abs(v - v_bf16) ./ (abs(v) + eps);
+err_fp16 = abs(v - v_fp16) ./ (abs(v) + eps);
+err_single = abs(v - v_single) ./ (abs(v) + eps);
+
+% --- Logique de sélection par masques ---
+
+% 1. Masque pour FP16 (Priorité 1)
+is_fp16 = (err_fp16 <= tolerance) & ~isinf(v_fp16) & (v_fp16 ~= 0);
+
+% 2. Masque pour BF16 (Priorité 2, si pas FP16)
+is_bf16 = ~is_fp16 & (err_bf16 <= tolerance) & ~isinf(v_bf16);
+
+% 3. Masque pour Single (32-bit) (Priorité 3, si ni FP16 ni BF16)
+is_single = ~(is_fp16 | is_bf16) & (err_single <= tolerance);
+
+% 4. Masque pour Double (64-bit) (Le reste)
+is_double = ~(is_fp16 | is_bf16 | is_single);
+
+% Construction du vecteur final v_new
+v_new = zeros(size(v));
+v_new(is_fp16) = v_fp16(is_fp16);
+v_new(is_bf16) = v_bf16(is_bf16);
+v_new(is_single) = v_single(is_single);
+v_new(is_double) = v(is_double);
+
+% Calcul de la taille totale (vectorisé)
+% On multiplie le nombre d'éléments de chaque type par leur bit-width
+taille = sum(is_fp16)*16 + sum(is_bf16)*16 + sum(is_single)*32 + sum(is_double)*64;
+
+% Reconstruction de la matrice creuse
+Ms = sparse(i, j, v_new, size(M, 1), size(M, 2));
+end
+
 
 % Initialisation de la fonction chop
 chop([], struct('format', 'h')); % Initialise les paramètres internes
 
 seuils = logspace(-5, -1, 10);
-precisions = {'double', 'single', 'fp16', 'bfloat16'};
+precisions = {'double', 'single', 'fp16', 'bfloat16','mixte'};
 
 % Tableaux pour stocker les résultats
 iters_map = zeros(length(precisions), length(seuils));
@@ -172,11 +221,16 @@ for i = 1:length(seuils)
 
     for j = 1:length(precisions)
         p_type = precisions{j};
-
-        % Dégradation de L et U selon la précision choisie
-        L_mod = simuler_precision(L, p_type);
-        U_mod = simuler_precision(U, p_type);
-
+        if strcmp(p_type, 'mixte')
+            % Utilisation de la fonction avec tolérance adaptative
+            [L_mod, tL] = simuler_precision_optimale(L, s);
+            [U_mod, tU] = simuler_precision_optimale(U, s);
+            fprintf("taille %d, drop %f\n", tL+tU, s);
+        else
+            % Dégradation de L et U selon la précision choisie
+            L_mod = simuler_precision(L, p_type);
+            U_mod = simuler_precision(U, p_type);
+        end
         % Test avec GMRES
         warning('off', 'all'); % Désactive les alertes de convergence de GMRES
         res = test_ilu(M, L_mod, U_mod, P);
@@ -190,7 +244,7 @@ end
 %% GRAPHIQUE 1 : Robustesse du nombre d'itérations selon la précision
 figure('Name', 'Itérations vs Précision');
 clf;
-couleurs = {'-ok', '-sb', '-^r', '-dg'};
+couleurs = {'-ok', '-sb', '-^r', '-dg','--pm'};
 
 for j = 1:length(precisions)
     semilogx(seuils, iters_map(j, :), couleurs{j}, 'LineWidth', 1.5, 'MarkerSize', 6);
@@ -199,14 +253,14 @@ end
 
 set(gca, 'XDir', 'reverse'); % Inverser l'axe X pour voir la tolérance la plus stricte à gauche
 grid on;
-legend('64-bit (Double)', '32-bit (Single)', '16-bit (FP16)', '16-bit (BFloat16)', 'Location', 'best');
+legend(precisions, 'Location', 'best');
 xlabel('Tolérance de chute (droptol)');
 ylabel('Nombre d''itérations de GMRES');
 title('Impact de la précision de stockage de ILU sur la convergence');
 hold off;
 
 %% GRAPHIQUE 2 : Profil de convergence pour un Seuil Spécifique (ex: droptol = 1e-3)
-s_cible = 1e-3;
+s_cible = 1e-5;
 setup.droptol = s_cible;
 [L, U, P] = ilu(M, setup);
 
@@ -215,17 +269,23 @@ clf;
 
 for j = 1:length(precisions)
     p_type = precisions{j};
-    L_mod = simuler_precision(L, p_type);
-    U_mod = simuler_precision(U, p_type);
-
+    if strcmp(p_type, 'mixte')
+        % Utilisation de la fonction avec tolérance adaptative
+        [L_mod, tL] = simuler_precision_optimale(L, s);
+        [U_mod, tU] = simuler_precision_optimale(U, s);
+    else
+        L_mod = simuler_precision(L, p_type);
+        U_mod = simuler_precision(U, p_type);
+    end
     res = test_ilu(M, L_mod, U_mod, P);
+    fprintf("%d , reussi %d \n", s_cible, res.flag);
 
-    semilogy(0:res.iterations, res.resvec / norm(M*ones(size(M,1),1)), couleurs{j}, 'LineWidth', 1.5);
+    semilogy(0:res.iterations, res.resvec, couleurs{j}, 'LineWidth', 1.5);
     hold on;
 end
 
 grid on;
-legend('64-bit (Double)', '32-bit (Single)', '16-bit (FP16)', '16-bit (BFloat16)', 'Location', 'northeast');
+legend(precisions, 'Location', 'northeast');
 xlabel('Numéro de l''itération GMRES');
 ylabel('Résidu Relatif');
 title(sprintf('Historique des résidus (droptol = %.1e)', s_cible));
