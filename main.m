@@ -1,6 +1,7 @@
 load("data/bcsstk08.mat")
 
 M = Problem.A;
+
 seuils = [0.2, 1e-1, 1e-2, 1e-3, 1e-4];
 %{
 
@@ -67,7 +68,6 @@ hold off;
 [res,s] = opti_dicho(M,0,10,1e-2);
 fprintf('\nSeuil: %.3e | Iter: %3d | Fill-in: %.2f | Flag: %d\n', ...
     s, res.iterations, res.fill_in, res.flag);
-%}
 
 function [results, seuil] = opti_dicho(A, debut, fin ,precision)
 setup.type = 'ilutp';
@@ -120,6 +120,7 @@ while abs(debut - fin) > precision
     end
 end
 end
+%}
 
 function Ms = simuler_precision(M, type)
 % Extrait uniquement les éléments non-nuls pour ne pas remplir la matrice
@@ -148,61 +149,12 @@ end
 Ms = sparse(i, j, v_new, size(M,1), size(M,2));
 end
 
-function [Ms, taille] = simuler_precision_optimale(M, tolerance)
-% Extraction des éléments non nuls
-[i, j, v] = find(M);
-n = length(v);
-if n == 0
-    Ms = M; taille = 0; return;
-end
-
-% Préparation des vecteurs de test
-% On calcule les approximations pour TOUS les éléments d'un coup
-v_bf16 = chop(v, struct('format', 'b'));
-v_fp16 = chop(v, struct('format', 'h'));
-v_single = double(single(v));
-
-% Calcul des erreurs relatives (vectorisé)
-% eps est ajouté au dénominateur pour éviter la division par zéro
-err_bf16 = abs(v - v_bf16) ./ (abs(v) + eps);
-err_fp16 = abs(v - v_fp16) ./ (abs(v) + eps);
-err_single = abs(v - v_single) ./ (abs(v) + eps);
-
-% --- Logique de sélection par masques ---
-
-% 1. Masque pour FP16 (Priorité 1)
-is_fp16 = (err_fp16 <= tolerance) & ~isinf(v_fp16) & (v_fp16 ~= 0);
-
-% 2. Masque pour BF16 (Priorité 2, si pas FP16)
-is_bf16 = ~is_fp16 & (err_bf16 <= tolerance) & ~isinf(v_bf16);
-
-% 3. Masque pour Single (32-bit) (Priorité 3, si ni FP16 ni BF16)
-is_single = ~(is_fp16 | is_bf16) & (err_single <= tolerance);
-
-% 4. Masque pour Double (64-bit) (Le reste)
-is_double = ~(is_fp16 | is_bf16 | is_single);
-
-% Construction du vecteur final v_new
-v_new = zeros(size(v));
-v_new(is_fp16) = v_fp16(is_fp16);
-v_new(is_bf16) = v_bf16(is_bf16);
-v_new(is_single) = v_single(is_single);
-v_new(is_double) = v(is_double);
-
-% Calcul de la taille totale (vectorisé)
-% On multiplie le nombre d'éléments de chaque type par leur bit-width
-taille = sum(is_fp16)*16 + sum(is_bf16)*16 + sum(is_single)*32 + sum(is_double)*64;
-
-% Reconstruction de la matrice creuse
-Ms = sparse(i, j, v_new, size(M, 1), size(M, 2));
-end
-
 
 % Initialisation de la fonction chop
 chop([], struct('format', 'h')); % Initialise les paramètres internes
 
 seuils = logspace(-5, -1, 10);
-precisions = {'double', 'single', 'fp16', 'bfloat16','mixte'};
+precisions = {'double', 'single', 'fp16', 'bfloat16'};
 
 % Tableaux pour stocker les résultats
 iters_map = zeros(length(precisions), length(seuils));
@@ -221,16 +173,9 @@ for i = 1:length(seuils)
 
     for j = 1:length(precisions)
         p_type = precisions{j};
-        if strcmp(p_type, 'mixte')
-            % Utilisation de la fonction avec tolérance adaptative
-            [L_mod, tL] = simuler_precision_optimale(L, s);
-            [U_mod, tU] = simuler_precision_optimale(U, s);
-            fprintf("taille %d, drop %f\n", tL+tU, s);
-        else
-            % Dégradation de L et U selon la précision choisie
-            L_mod = simuler_precision(L, p_type);
-            U_mod = simuler_precision(U, p_type);
-        end
+        % Dégradation de L et U selon la précision choisie
+        L_mod = simuler_precision(L, p_type);
+        U_mod = simuler_precision(U, p_type);
         % Test avec GMRES
         warning('off', 'all'); % Désactive les alertes de convergence de GMRES
         res = test_ilu(M, L_mod, U_mod, P);
@@ -269,14 +214,8 @@ clf;
 
 for j = 1:length(precisions)
     p_type = precisions{j};
-    if strcmp(p_type, 'mixte')
-        % Utilisation de la fonction avec tolérance adaptative
-        [L_mod, tL] = simuler_precision_optimale(L, s);
-        [U_mod, tU] = simuler_precision_optimale(U, s);
-    else
-        L_mod = simuler_precision(L, p_type);
-        U_mod = simuler_precision(U, p_type);
-    end
+    L_mod = simuler_precision(L, p_type);
+    U_mod = simuler_precision(U, p_type);
     res = test_ilu(M, L_mod, U_mod, P);
     fprintf("%d , reussi %d \n", s_cible, res.flag);
 
