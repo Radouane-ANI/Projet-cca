@@ -28,14 +28,10 @@ for i = 1:n_tests
     results_mixte.iters(i) = res_mix.iterations;
     results_mixte.rel_err(i) = res_mix.relative_error;
 
-    % On déduit le 64-bits (tout ce qui n'est pas 16 ou 32)
-    tot_nnz_mix = nnz(L_mix) + nnz(U_mix);
-    c_half = counts(1);
-    c_single = counts(2);
-    c_double = tot_nnz_mix - c_half - c_single;
-    results_mixte.precision_dist(i, :) = [c_half, c_single, c_double];
-
-    pct = (results_mixte.precision_dist(i, :) / tot_nnz_mix) * 100;
+    % On utilise DIRECTEMENT les compteurs de la fonction, pas de déduction hasardeuse !
+    results_mixte.precision_dist(i, :) = counts;
+    tot_processed = sum(counts);
+    pct = (counts / tot_processed) * 100;
 
     % ===== 2. TEST GEP STANDARD (64-bits) =====
     [L_std, U_std, P_std] = gep(M, s, 1, 1);
@@ -99,8 +95,7 @@ grid on;
 mem_std = (results_std.fill_in * nnz(M)) * 8 / 1024; % 8 bytes par élément en Double
 mem_mix = (results_mixte.precision_dist(:,1)*2 + ...
     results_mixte.precision_dist(:,2)*4 + ...
-    results_mixte.precision_dist(:,3)*8) / 1024; % 2 bytes(16b), 4 bytes(32b), 8 bytes(64b)
-
+    results_mixte.precision_dist(:,3)*8) / 1024;
 figure('Name', 'Empreinte Mémoire');
 semilogx(seuils, mem_mix, '-o', 'LineWidth', 2.5, 'Color', c_mix); hold on;
 semilogx(seuils, mem_std, '-^', 'LineWidth', 2.5, 'Color', c_std);
@@ -123,7 +118,7 @@ pp = 1:m;
 col_norms = vecnorm(A);
 chop([], struct('format', 'h'));
 
-counts = [0, 0]; % [nb_half, nb_single]
+counts = [0, 0, 0]; % [nb_half, nb_single, nb_double]
 
 for k = 1:min(m-1,n)
     if thresh ~= 0
@@ -151,9 +146,8 @@ for k = 1:min(m-1,n)
     kept_mask_L = ~drop_mask_L;
     if any(kept_mask_L)
         tau_L = (droptol * col_norms(k)) ./ abs(multipliers(kept_mask_L) * A(k,k));
-        [multipliers(kept_mask_L), c_h, c_s] = apply_mixed_precision(multipliers(kept_mask_L), tau_L);
-        counts(1) = counts(1) + c_h;
-        counts(2) = counts(2) + c_s;
+        [multipliers(kept_mask_L), c_h, c_s, c_d] = apply_mixed_precision(multipliers(kept_mask_L), tau_L);
+        counts = counts + [c_h, c_s, c_d];
     end
     A(i,k) = multipliers;
 
@@ -168,11 +162,13 @@ for k = 1:min(m-1,n)
         if any(kept_mask_U)
             norms_U = col_norms(j(kept_mask_U));
             tau_U = (droptol * norms_U) ./ abs(row_U(kept_mask_U));
-            [row_U(kept_mask_U), c_h, c_s] = apply_mixed_precision(row_U(kept_mask_U), tau_U);
-            counts(1) = counts(1) + c_h;
-            counts(2) = counts(2) + c_s;
+            [row_U(kept_mask_U), c_h, c_s, c_d] = apply_mixed_precision(row_U(kept_mask_U), tau_U);
+            counts = counts + [c_h, c_s, c_d];
         end
         A(k, j) = row_U;
+        if A(k,k) ~= 0
+            counts(3) = counts(3) + 1;
+        end
     end
 end
 if nargout <= 1
@@ -184,7 +180,7 @@ U = U(1:n,:);
 if nargout >= 3, P = eye(m); P = P(pp,:); end
 end
 
-function [val_out, n_h, n_s] = apply_mixed_precision(val_in, tau)
+function [val_out, n_h, n_s, n_d] = apply_mixed_precision(val_in, tau)
 val_out = val_in;
 u_half = 4.88e-4;
 u_single = 5.96e-8;
@@ -195,6 +191,7 @@ mask_single = (tau >= u_single) & ~mask_half;
 
 n_h = sum(mask_half);
 n_s = sum(mask_single);
+n_d = length(val_in) - n_h - n_s; % Le reste est conservé intact en 64-bits
 
 if n_h > 0
     opt.format = 'h';
