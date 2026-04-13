@@ -1,4 +1,4 @@
-load("data/494_bus.mat");
+load("data/bcsstk08.mat");
 M = Problem.A;
 
 addpath('~/chop');
@@ -166,9 +166,9 @@ for k = 1:min(m-1,n)
             counts = counts + [c_h, c_s, c_d];
         end
         A(k, j) = row_U;
-        if A(k,k) ~= 0
-            counts(3) = counts(3) + 1;
-        end
+        tau_pivot = (droptol * col_norms(k)) / abs(A(k,k));
+        [A(k,k), c_h_piv, c_s_piv, c_d_piv] = apply_mixed_precision(A(k,k), tau_pivot);
+        counts = counts + [c_h_piv, c_s_piv, c_d_piv];    
     end
 end
 if nargout <= 1
