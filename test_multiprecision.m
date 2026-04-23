@@ -1,9 +1,9 @@
 load("data/494_bus.mat");
 M = Problem.A;
 addpath('~/chop');
-seuils = logspace(-5, -1, 8);
+seuils = logspace(-10, -1, 8);
 n_tests = length(seuils);
-
+%{
 % Initialisation des résultats
 results_mixte = struct('iters', zeros(n_tests, 1), 'fill_in', zeros(n_tests, 1), ...
     'rel_err', zeros(n_tests, 1), 'precision_dist', zeros(n_tests, 5));
@@ -115,7 +115,135 @@ ylabel('Taille en Kilo-Octets (KB)');
 legend('Stockage Mixte (Compressé)', 'Stockage Standard (FP64)', 'Location', 'best');
 title('Empreinte Mémoire Théorique du Préconditionneur');
 grid on;
+%}
 
+% ===============================================
+% TEST COMPARATIF : GEP MIXTE vs ILU FULL 16/32/64
+% ===============================================
+
+% Structures pour stocker les résultats [Mixte, ILU64, ILU32, ILU16]
+iters = zeros(n_tests, 4); 
+mem = zeros(n_tests, 4);   
+
+fprintf('===== COMPARAISON DES APPROCHES (Troncature sur ILU MATLAB) =====\n\n');
+fprintf('Seuil    | Mix Iter | ILU64 Iter | ILU32 Iter | ILU16 Iter \n');
+fprintf('---------|----------|------------|------------|------------\n');
+
+% Configuration pour le FP16
+opt_half = struct('format', 'h');
+
+for i = 1:n_tests
+    s = seuils(i);
+    
+    % --- 1. GEP Mixte (Adaptatif pendant la factorisation) ---
+    [L_mix, U_mix, P_mix, counts] = gep_mixte(M, s, 1, 1);
+    res_mix = test_ilu(M, L_mix, U_mix, P_mix);
+    iters(i, 1) = res_mix.iterations;
+    % Mémoire Mixte : pondérée par les 5 formats
+    mem(i, 1) = (counts(1)*2 + counts(2)*3 + counts(3)*4 + counts(4)*6 + counts(5)*8) / 1024;
+    
+    % --- FACTORISATION ILU DE BASE ---
+    setup.type = 'ilutp'; 
+    setup.droptol = s; 
+    setup.udiag = 1;
+    [L_ilu, U_ilu, P_ilu] = ilu(M, setup);
+    
+    % Nombre d'éléments réels stockés par ILU
+    nnz_total = nnz(L_ilu) + nnz(U_ilu) - size(M,1); 
+    
+    % --- 2. ILU FP64 (Baseline Standard) ---
+    res_64 = test_ilu(M, L_ilu, U_ilu, P_ilu);
+    iters(i, 2) = res_64.iterations;
+    mem(i, 2) = (nnz_total * 8) / 1024;
+    
+    % --- 3. ILU FP32 (Troncature a posteriori) ---
+    % spfun applique la conversion uniquement sur les éléments non nuls
+    L_32 = spfun(@(x) double(single(x)), L_ilu);
+    U_32 = spfun(@(x) double(single(x)), U_ilu);
+    res_32 = test_ilu(M, L_32, U_32, P_ilu);
+    iters(i, 3) = res_32.iterations;
+    mem(i, 3) = (nnz_total * 4) / 1024;
+    
+    % --- 4. ILU FP16 (Troncature a posteriori) ---
+    L_16 = spfun(@(x) chop(full(x), opt_half), L_ilu);
+    U_16 = spfun(@(x) chop(full(x), opt_half), U_ilu);
+    res_16 = test_ilu(M, L_16, U_16, P_ilu);
+    iters(i, 4) = res_16.iterations;
+    mem(i, 4) = (nnz_total * 2) / 1024;
+    
+    fprintf('%.1e | %8d | %10d | %10d | %10d \n', s, iters(i,1), iters(i,2), iters(i,3), iters(i,4));
+end
+
+% =========================================================================
+% 1. TEST DE ROBUSTESSE (Qualité de la convergence)
+% =========================================================================
+figure('Name', 'Test de Robustesse', 'Position', [100, 100, 800, 500]);
+
+% On remplace les 0 itérations (crash) par des NaN pour couper les courbes
+iters_plot = iters;
+iters_plot(iters_plot == 0) = NaN;
+
+loglog(seuils, iters_plot(:,1), '-o', 'LineWidth', 2.5, 'Color', '#0072BD', 'MarkerSize', 8); hold on;
+loglog(seuils, iters_plot(:,2), '-^', 'LineWidth', 2, 'Color', '#77AC30');
+loglog(seuils, iters_plot(:,3), '-s', 'LineWidth', 2, 'Color', '#D95319');
+loglog(seuils, iters_plot(:,4), '-d', 'LineWidth', 2, 'Color', '#EDB120');
+
+set(gca, 'XDir', 'reverse');
+grid on;
+xlabel('Drop-tolerance (Sévérité du filtre)');
+ylabel('Nombre d''itérations GMRES');
+title('Test de Robustesse : Survie du solveur selon la précision');
+legend('GEP Mixte Adaptatif', 'ILU FP64 (Référence)', 'ILU FP32', 'ILU FP16 (Instable)', 'Location', 'best');
+
+% =========================================================================
+% 2. PROFIL DE PERFORMANCE (Empreinte Mémoire)
+% =========================================================================
+% 1. Construction de la matrice des coûts (Mémoire)
+% Si l'algorithme a crashé (0 itération), son coût devient Infini
+cost_matrix = mem;
+cost_matrix(iters == 0) = Inf;
+
+% 2. Calcul du meilleur coût pour chaque test (droptol)
+min_cost = min(cost_matrix, [], 2);
+
+% 3. Calcul du ratio de performance (tau)
+% ratio = 1 signifie que l'algorithme est le meilleur sur ce test
+perf_ratio = cost_matrix ./ min_cost;
+
+% 4. Préparation de l'axe X (le facteur de surcoût tau)
+tau_max = max(perf_ratio(perf_ratio < Inf));
+if isempty(tau_max) || tau_max == 1
+    tau_max = 5; % Sécurité graphique
+end
+% On crée un axe log pour tau, de 1 (meilleur) jusqu'au pire facteur
+tau_vals = linspace(1, tau_max * 1.1, 1000); 
+
+% 5. Calcul des courbes du profil (Fraction des tests résolus <= tau)
+n_solvers = 4;
+profile = zeros(length(tau_vals), n_solvers);
+for s = 1:n_solvers
+    for k = 1:length(tau_vals)
+        % Combien de tests ce solveur a-t-il résolu avec un coût <= tau * min_cost ?
+        profile(k, s) = sum(perf_ratio(:, s) <= tau_vals(k)) / n_tests;
+    end
+end
+
+% 6. Tracé du Profil de Performance
+figure('Name', 'Profil de Performance ', 'Position', [150, 150, 800, 500]);
+
+% Utilisation de lignes distinctes pour un rendu "Publication"
+plot(tau_vals, profile(:,1), '-',  'LineWidth', 3,   'Color', '#0072BD'); hold on; % Mixte
+plot(tau_vals, profile(:,2), '--', 'LineWidth', 2.5, 'Color', '#77AC30');          % FP64
+plot(tau_vals, profile(:,3), '-.', 'LineWidth', 2.5, 'Color', '#D95319');          % FP32
+plot(tau_vals, profile(:,4), ':',  'LineWidth', 2.5, 'Color', '#EDB120');          % FP16
+
+grid on;
+xlabel('Facteur de surcoût toléré par rapport au meilleur (\tau)');
+ylabel('Fraction des tests résolus avec succès');
+title('Profil de Performance (Dolan-Moré) : Efficacité Mémoire');
+legend('GEP Mixte Adaptatif', 'ILU FP64', 'ILU FP32', 'ILU FP16', 'Location', 'southeast');
+ylim([0 1.05]);
+xlim([1 max(tau_vals)]);
 %%
 function [L, U, P, counts] = gep_mixte(A, droptol, thresh, udiag)
 [m, n] = size(A);
@@ -197,43 +325,47 @@ if nargout >= 3, P = eye(m); P = P(pp,:); end
 end
 
 function [val_out, n_16, n_24, n_32, n_48, n_64] = apply_mixed_precision(val_in, tau)
-val_out = val_in;
-u_16 = 4.88e-4;
-u_24 = 1.53e-5;
-u_32 = 5.96e-8;
-u_48 = 7.28e-12;
-fp16_max = 65500;
+    val_out = val_in;
+    
+    % Unités d'arrondi (u = 2^(-t))
+    u_16 = 4.88e-4;   % Half (t=11)
+    u_24 = 1.53e-5;   % Custom 24-bit (t=17)
+    u_32 = 5.96e-8;   % Single (t=24)
+    u_48 = 1.45e-11;  % Custom 48-bit (t=37) -> 2^-36 ≈ 1.45e-11
+    
+    % Limites matérielles (emax)
+    fp16_max = 65504; 
+    fp24_max = 3.4e38; % Si emax reste 127 (souvent le cas en simul logicielle)
+    fp32_max = realmax('single');
+    
+    % Création des masques (Logique de cascade)
+    abs_val = abs(val_in);
+    mask_16 = (tau >= u_16) & (abs_val <= fp16_max);
+    mask_24 = (tau >= u_24) & (abs_val <= fp24_max) & ~mask_16;
+    mask_32 = (tau >= u_32) & (abs_val <= fp32_max) & ~mask_16 & ~mask_24;
+    mask_48 = (tau >= u_48) & ~mask_16 & ~mask_24 & ~mask_32; % Range identique au fp64
+    mask_64 = ~mask_16 & ~mask_24 & ~mask_32 & ~mask_48;
 
-mask_16 = (tau >= u_16) & (abs(val_in) <= fp16_max);
-mask_24 = (tau >= u_24) & ~mask_16;
-mask_32 = (tau >= u_32) & ~mask_16 & ~mask_24;
-mask_48 = (tau >= u_48) & ~mask_16 & ~mask_24 & ~mask_32;
-mask_64 = ~mask_16 & ~mask_24 & ~mask_32 & ~mask_48;
+    % Application de chop avec structures propres
+    if any(mask_16)
+        val_out(mask_16) = chop(val_in(mask_16), struct('format', 'h'));
+    end
 
-n_16 = sum(mask_16);
-n_24 = sum(mask_24);
-n_32 = sum(mask_32);
-n_48 = sum(mask_48);
-n_64 = sum(mask_64);
+    if any(mask_24)
+        % t=17 car 16 bits stockés + 1 caché. emax=127 pour range type float32
+        val_out(mask_24) = chop(val_in(mask_24), struct('format', 'c', 'params', [17, 127]));
+    end
 
-if n_16 > 0
-    opt.format = 'h';
-    val_out(mask_16) = chop(val_in(mask_16), opt);
-end
+    if any(mask_32)
+        val_out(mask_32) = single(val_in(mask_32)); 
+    end
 
-if n_24 > 0
-    opt.format = 'custom';
-    opt.params = [16, 127];
-    val_out(mask_24) = chop(val_in(mask_24), opt);
-end
+    if any(mask_48)
+        % t=37 car 36 bits stockés + 1 caché. emax=1023 (double range)
+        val_out(mask_48) = chop(val_in(mask_48), struct('format', 'c', 'params', [37, 1023], 'round', 4));
+    end
 
-if n_32 > 0
-    val_out(mask_32) = double(single(val_in(mask_32)));
-end
-
-if n_48 > 0
-    opt.format = 'custom';
-    opt.params = [38, 1023];
-    val_out(mask_48) = chop(val_in(mask_48), opt);
-end
+    % Comptage final
+    n_16 = sum(mask_16); n_24 = sum(mask_24); n_32 = sum(mask_32); 
+    n_48 = sum(mask_48); n_64 = sum(mask_64);
 end
