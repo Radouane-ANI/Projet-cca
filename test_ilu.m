@@ -12,10 +12,16 @@ results.fill_in = (nnz(L) + nnz(U)) / nnz(A);
 
 tol = 1e-10; % Tolérance d'arrêt du solveur
 maxit = 200;
-%L = P'*L;
-[~, flag, ~, ~, resvec] = gmres(P*A, P*b, [], tol, maxit, L, U);
 
-results.resvec = resvec;
-results.iterations = length(resvec) - 1;
-results.flag = flag; % 0 = succès, 1 = échec
+try
+    [~, flag, ~, ~, resvec] = gmres(P*A, P*b, [], tol, maxit, L, U);
+    results.resvec = resvec;
+    results.iterations = length(resvec) - 1;
+    results.flag = flag; % 0 = succès, 1 = échec, etc.
+catch e
+    % Si la factorisation a produit des NaN/Inf, gmres peut crasher
+    results.resvec = [];
+    results.iterations = maxit; % On pénalise avec maxit
+    results.flag = 1;
+end
 end
