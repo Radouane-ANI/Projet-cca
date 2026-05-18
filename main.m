@@ -27,14 +27,17 @@ figure('Name', 'Convergence Préliminaire ILU', 'Position', [100 100 800 500]);
 for s = seuils_prelim
     setup_prelim.type = 'ilutp';
     setup_prelim.droptol = s;
-    [L1, U1, P1] = ilu(M_bcs, setup_prelim);
-
-    res_prelim = test_ilu(M_bcs, L1, U1, P1);
-    fprintf('Seuil: %.1e | Iter: %3d | Err. Rel: %.2e | Fill-in: %.2f | Flag: %d\n', ...
-        s, res_prelim.iterations, res_prelim.relative_error, res_prelim.fill_in, res_prelim.flag);
-
-    semilogy(res_prelim.resvec, 'DisplayName', ['Seuil ' num2str(s)]);
-    hold on;
+    setup_prelim.udiag = 1;
+    try
+        [L1, U1, P1] = ilu(M_bcs, setup_prelim);
+        res_prelim = test_ilu(M_bcs, L1, U1, P1);
+        fprintf('Seuil: %.1e | Iter: %3d | Err. Rel: %.2e | Fill-in: %.2f | Flag: %d\n', ...
+            s, res_prelim.iterations, res_prelim.relative_error, res_prelim.fill_in, res_prelim.flag);
+        semilogy(res_prelim.resvec, 'DisplayName', ['Seuil ' num2str(s)]);
+        hold on;
+    catch e
+        fprintf('Seuil: %.1e | ÉCHEC: %s\n', s, e.message);
+    end
 end
 legend('Location', 'best');
 xlabel('Itérations GMRES');
@@ -67,16 +70,17 @@ droptols_valid = droptols(valid_indices);
 iterations_valid = iterations_comp(valid_indices);
 fill_ins_valid = fill_ins_comp(valid_indices);
 
-yyaxis left;
-semilogx(droptols_valid, iterations_valid, '-o');
-ylabel("Nombre d'itérations de GMRES");
-xlabel('Tolérance de chute (droptol)');
+subplot(2,1,1);
+semilogx(droptols_valid, iterations_valid, '-ob', 'MarkerFaceColor', 'b');
+ylabel("Itérations GMRES"); xlabel('droptol');
 title('Compromis entre droptol, itérations et fill-in');
+grid on;
 
-yyaxis right;
-semilogx(droptols_valid, fill_ins_valid, '-s');
-ylabel('Facteur de remplissage (fill-in)');
-legend("Nombre d'itérations", 'Fill-in', 'Location', 'best');
+subplot(2,1,2);
+semilogx(droptols_valid, fill_ins_valid, '-sr', 'MarkerFaceColor', 'r');
+ylabel('Fill-in'); xlabel('droptol');
+legend('Fill-in', 'Location', 'best');
+grid on;
 
 % --- 1.3 Optimisation par dichotomie ---
 [res_dicho, s_dicho] = opti_dicho(M_bcs, 0, 10, 1e-2);
@@ -163,6 +167,8 @@ colors = [
 
 solver_names = {'GEP Mixte', 'ILUT FP64', 'ILUT FP32', 'ILUT FP16', 'ILU(0) FP64', 'ILU(0) FP32', 'ILU(0) FP16'};
 markers = {'-o', '-^', '-s', '-d', '--^', '--s', '--d'};
+linestyles = {'-', '--', ':', '-.', '--', ':', '-.'};
+linewidths = [4.0, 2.5, 1.5, 1.2, 2.5, 1.5, 1.2];
 n_solvers = 7;
 opt_half = struct('format', 'h');
 
@@ -175,7 +181,7 @@ else
     M_sens = data_sens.A;
 end
 
-seuils = logspace(-6, -1, 6);
+seuils = logspace(-10, -1, 10);
 n_seuils = length(seuils);
 
 iters_sens = zeros(n_seuils, n_solvers);
@@ -251,7 +257,8 @@ i_plot = iters_sens;
 i_plot(i_plot >= 200 | i_plot == 0) = NaN;
 for s_idx = 1:4
     loglog(seuils, i_plot(:,s_idx), markers{s_idx}, 'Color', colors(s_idx,:), ...
-           'MarkerFaceColor', colors(s_idx,:), 'MarkerSize', 7); hold on;
+           'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx), ...
+           'MarkerFaceColor', colors(s_idx,:), 'MarkerSize', 11 - 2*s_idx); hold on;
 end
 set(gca, 'XDir', 'reverse');
 xlabel('Tolérance de chute (Droptol)'); ylabel('Itérations GMRES');
@@ -261,25 +268,27 @@ legend(solver_names(1:4), 'Location', 'best', 'Interpreter', 'none');
 subplot(1,2,2);
 for s_idx = [1, 2]
     semilogx(seuils, fill_in_sens(:,s_idx), markers{s_idx}, 'Color', colors(s_idx,:), ...
-             'MarkerFaceColor', colors(s_idx,:), 'MarkerSize', 7); hold on;
+             'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx), ...
+             'MarkerFaceColor', colors(s_idx,:), 'MarkerSize', 11 - 2*s_idx); hold on;
 end
 set(gca, 'XDir', 'reverse');
 xlabel('Tolérance de chute (Droptol)'); ylabel('Facteur de Fill-in');
 title('Évolution du remplissage');
 legend({'GEP Mixte', 'ILUT'}, 'Location', 'best', 'Interpreter', 'none');
 
-figure('Name', 'Distribution des formats de précision', 'Position', [350 350 800 500]);
+figure('Name', 'Distribution des formats de précision', 'Position', [350 350 1100 500]);
 row_sums = sum(dist_mixte, 2);
 row_sums(row_sums == 0) = 1;
 dist_pct = (dist_mixte ./ row_sums) * 100;
-b = bar(1:n_seuils, dist_pct, 'stacked', 'FaceColor', 'flat');
+b = bar(1:n_seuils, dist_pct, 'stacked');
 if ~isempty(b)
-    b(1).CData = [0.93 0.69 0.13]; % FP16
-    b(2).CData = [0.85 0.33 0.10]; % FP24
-    b(3).CData = [0.30 0.75 0.93]; % FP32
-    b(4).CData = [0.47 0.67 0.19]; % FP48
-    b(5).CData = [0 0.45 0.74];    % FP64
+    set(b(1), 'FaceColor', [0.93 0.69 0.13]); % FP16
+    set(b(2), 'FaceColor', [0.85 0.33 0.10]); % FP24
+    set(b(3), 'FaceColor', [0.30 0.75 0.93]); % FP32
+    set(b(4), 'FaceColor', [0.47 0.67 0.19]); % FP48
+    set(b(5), 'FaceColor', [0 0.45 0.74]);    % FP64
 end
+set(gca, 'XTick', 1:n_seuils);
 set(gca, 'XTickLabel', arrayfun(@(x) sprintf('%.1e', x), seuils, 'UniformOutput', false));
 set(gca, 'XTickLabelRotation', 45);
 ylabel('Proportion des éléments (%)');
@@ -383,6 +392,13 @@ for i = 1:n_tests
         iters(i,1), iters(i,2), iters(i,3), iters(i,4), iters(i,5), iters(i,6), iters(i,7));
 end
 
+% --- Calcul du nombre de matrices résolues pour normaliser les profils ---
+n_solved_no_ilu0 = sum(any(iters(:, 1:4) < 200, 2));
+if n_solved_no_ilu0 == 0, n_solved_no_ilu0 = n_tests; end
+
+n_solved = sum(any(iters(:, 1:7) < 200, 2));
+if n_solved == 0, n_solved = n_tests; end
+
 % --- Profil de Performance Mémoire (SANS ILU0) ---
 cost_matrix_no_ilu0 = mem(:, 1:4);
 cost_matrix_no_ilu0(iters(:, 1:4) >= 200 | iters(:, 1:4) == 0) = Inf;
@@ -397,18 +413,26 @@ tau_vals_no_ilu0 = linspace(1, tau_max_no_ilu0 * 1.1, 1000);
 profile_no_ilu0 = zeros(length(tau_vals_no_ilu0), 4);
 for s_idx = 1:4
     for k = 1:length(tau_vals_no_ilu0)
-        profile_no_ilu0(k, s_idx) = sum(perf_ratio_no_ilu0(:, s_idx) <= tau_vals_no_ilu0(k)) / n_tests;
+        profile_no_ilu0(k, s_idx) = sum(perf_ratio_no_ilu0(:, s_idx) <= tau_vals_no_ilu0(k)) / n_solved_no_ilu0;
     end
 end
 
 figure('Name', 'Profil de Performance Mémoire (SANS ILU0)', 'Position', [420 420 800 550]);
+h_lines = zeros(1, 4);
 for s_idx = 1:4
-    plot(tau_vals_no_ilu0, profile_no_ilu0(:,s_idx), markers{s_idx}(1:end-1), 'Color', colors(s_idx,:)); hold on;
+    % Ligne continue
+    h_lines(s_idx) = plot(tau_vals_no_ilu0, profile_no_ilu0(:,s_idx), 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
+    % Marqueurs clairsemés
+    marker_indices = round(linspace(1, length(tau_vals_no_ilu0), 15));
+    plot(tau_vals_no_ilu0(marker_indices), profile_no_ilu0(marker_indices, s_idx), ...
+         markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*s_idx, 'LineStyle', 'none');
 end
 xlabel('Facteur de surcoût mémoire toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Efficacité Mémoire (SANS ILU0)');
-legend(solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_lines, solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals_no_ilu0)]);
 
 % --- Profil de Performance Mémoire (AVEC ILU0) ---
@@ -425,18 +449,26 @@ tau_vals = linspace(1, tau_max * 1.1, 1000);
 profile = zeros(length(tau_vals), n_solvers);
 for s_idx = 1:n_solvers
     for k = 1:length(tau_vals)
-        profile(k, s_idx) = sum(perf_ratio(:, s_idx) <= tau_vals(k)) / n_tests;
+        profile(k, s_idx) = sum(perf_ratio(:, s_idx) <= tau_vals(k)) / n_solved;
     end
 end
 
 figure('Name', 'Profil de Performance Mémoire', 'Position', [450 450 800 550]);
+h_lines = zeros(1, n_solvers);
 for s_idx = 1:n_solvers
-    plot(tau_vals, profile(:,s_idx), markers{s_idx}(1:end-1), 'Color', colors(s_idx,:)); hold on;
+    % Ligne continue
+    h_lines(s_idx) = plot(tau_vals, profile(:,s_idx), 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
+    % Marqueurs clairsemés
+    marker_indices = round(linspace(1, length(tau_vals), 15));
+    plot(tau_vals(marker_indices), profile(marker_indices, s_idx), ...
+         markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*min(s_idx, 4), 'LineStyle', 'none');
 end
 xlabel('Facteur de surcoût mémoire toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Efficacité Mémoire');
-legend(solver_names, 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_lines, solver_names, 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals)]);
 
 % --- Profil de Performance Itérations (SANS ILU0) ---
@@ -453,18 +485,26 @@ tau_vals_iters_no_ilu0 = linspace(1, tau_max_iters_no_ilu0 * 1.1, 1000);
 profile_iters_no_ilu0 = zeros(length(tau_vals_iters_no_ilu0), 4);
 for s_idx = 1:4
     for k = 1:length(tau_vals_iters_no_ilu0)
-        profile_iters_no_ilu0(k, s_idx) = sum(perf_ratio_iters_no_ilu0(:, s_idx) <= tau_vals_iters_no_ilu0(k)) / n_tests;
+        profile_iters_no_ilu0(k, s_idx) = sum(perf_ratio_iters_no_ilu0(:, s_idx) <= tau_vals_iters_no_ilu0(k)) / n_solved_no_ilu0;
     end
 end
 
 figure('Name', 'Profil de Performance Itérations (SANS ILU0)', 'Position', [480 480 800 550]);
+h_lines = zeros(1, 4);
 for s_idx = 1:4
-    plot(tau_vals_iters_no_ilu0, profile_iters_no_ilu0(:,s_idx), markers{s_idx}(1:end-1), 'Color', colors(s_idx,:)); hold on;
+    % Ligne continue
+    h_lines(s_idx) = plot(tau_vals_iters_no_ilu0, profile_iters_no_ilu0(:,s_idx), 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
+    % Marqueurs clairsemés
+    marker_indices = round(linspace(1, length(tau_vals_iters_no_ilu0), 15));
+    plot(tau_vals_iters_no_ilu0(marker_indices), profile_iters_no_ilu0(marker_indices, s_idx), ...
+         markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*s_idx, 'LineStyle', 'none');
 end
 xlabel('Facteur de surcoût en itérations toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Robustesse / Itérations (SANS ILU0)');
-legend(solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_lines, solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals_iters_no_ilu0)]);
 
 % --- Profil de Performance Itérations (AVEC ILU0) ---
@@ -481,97 +521,24 @@ tau_vals_iters = linspace(1, tau_max_iters * 1.1, 1000);
 profile_iters = zeros(length(tau_vals_iters), n_solvers);
 for s_idx = 1:n_solvers
     for k = 1:length(tau_vals_iters)
-        profile_iters(k, s_idx) = sum(perf_ratio_iters(:, s_idx) <= tau_vals_iters(k)) / n_tests;
+        profile_iters(k, s_idx) = sum(perf_ratio_iters(:, s_idx) <= tau_vals_iters(k)) / n_solved;
     end
 end
 
 figure('Name', 'Profil de Performance Itérations', 'Position', [500 500 800 550]);
+h_lines = zeros(1, n_solvers);
 for s_idx = 1:n_solvers
-    plot(tau_vals_iters, profile_iters(:,s_idx), markers{s_idx}(1:end-1), 'Color', colors(s_idx,:)); hold on;
+    % Ligne continue
+    h_lines(s_idx) = plot(tau_vals_iters, profile_iters(:,s_idx), 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
+    % Marqueurs clairsemés
+    marker_indices = round(linspace(1, length(tau_vals_iters), 15));
+    plot(tau_vals_iters(marker_indices), profile_iters(marker_indices, s_idx), ...
+         markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*min(s_idx, 4), 'LineStyle', 'none');
 end
 xlabel('Facteur de surcoût en itérations toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Robustesse / Itérations');
-legend(solver_names, 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_lines, solver_names, 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals_iters)]);
-
-
-% =========================================================================
-% FONCTIONS ANNEXES
-% =========================================================================
-
-function [results, seuil] = opti_dicho(A, debut, fin, precision)
-    setup.type = 'ilutp';
-    results = struct('iterations', 0, 'fill_in', 0, 'flag', 1);
-    seuil = 1;
-
-    while abs(debut - fin) > precision
-        mid = (debut + fin)/2;
-
-        setup.droptol = 10^-debut;
-        tic
-        [Ld, Ud, Pd] = ilu(A, setup);
-        tpsd = toc;
-        warning('off', 'all');
-        resd = test_ilu(A, Ld, Ud, Pd);
-        warning('on', 'all');
-        Jd = tpsd * resd.fill_in * resd.iterations;
-        if resd.flag
-            debut = debut + (fin+debut)*0.1;
-            continue;
-        end
-
-        setup.droptol = 10^-mid;
-        tic
-        [Lm, Um, Pm] = ilu(A, setup);
-        tpsm = toc;
-        warning('off', 'all');
-        resm = test_ilu(A, Lm, Um, Pm);
-        warning('on', 'all');
-        Jm = tpsm * resm.fill_in * resm.iterations;
-
-        setup.droptol = 10^-fin;
-        tic
-        [Lf, Uf, Pf] = ilu(A, setup);
-        tpsf = toc;
-        warning('off', 'all');
-        resf = test_ilu(A, Lf, Uf, Pf);
-        warning('on', 'all');
-        Jf = tpsf * resf.fill_in * resf.iterations;
-
-        if Jm < Jd && Jm < Jf
-            debut   = debut + (mid - debut)/2;
-            fin     = fin   - (fin - mid)/2;
-            results = resm;
-            seuil   = 10^-mid;
-        elseif Jd < Jf
-            fin     = mid;
-            results = resd;
-            seuil   = 10^-debut;
-        else
-            debut   = mid;
-            results = resf;
-            seuil   = 10^-fin;
-        end
-    end
-end
-
-function Ms = simuler_precision(M, type)
-    [i, j, v] = find(M);
-
-    switch type
-        case 'single'
-            v_new = double(single(v));
-        case 'fp16'
-            opt.format = 'h';
-            v_new = chop(v, opt);
-        case 'bfloat16'
-            opt.format = 'b';
-            v_new = chop(v, opt);
-        case 'double'
-            v_new = v;
-        otherwise
-            error('Type de précision non reconnu');
-    end
-    Ms = sparse(i, j, v_new, size(M,1), size(M,2));
-end
