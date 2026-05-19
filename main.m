@@ -171,11 +171,22 @@ opt_half = struct('format', 'h');
 
 % --- 2.1 Analyse de sensibilité au droptol ---
 fprintf('\n--- Analyse de sensibilité (Variation de droptol) ---\n');
-data_sens = load('data/494_bus.mat');
+data_sens = load('data/bcsstk08.mat');
 if isfield(data_sens, 'Problem')
     M_sens = data_sens.Problem.A;
 else
     M_sens = data_sens.A;
+end
+if isstruct(M_sens)
+    n = length(M_sens.jc) - 1;
+    col_idx = zeros(length(M_sens.ir), 1);
+    for col = 1:n
+        start_idx = M_sens.jc(col) + 1;
+        end_idx = M_sens.jc(col+1);
+        col_idx(start_idx:end_idx) = col;
+    end
+    row_idx = double(M_sens.ir) + 1;
+    M_sens = sparse(row_idx, col_idx, double(M_sens.data));
 end
 
 seuils = logspace(-10, -1, 10);
@@ -331,6 +342,17 @@ for i = 1:n_tests
     else
         continue; 
     end
+    if isstruct(M)
+        n = length(M.jc) - 1;
+        col_idx = zeros(length(M.ir), 1);
+        for col = 1:n
+            start_idx = M.jc(col) + 1;
+            end_idx = M.jc(col+1);
+            col_idx(start_idx:end_idx) = col;
+        end
+        row_idx = double(M.ir) + 1;
+        M = sparse(row_idx, col_idx, double(M.data));
+    end
     
     if size(M,1) ~= size(M,2)
         iters(i, :) = 200; mem(i, :) = Inf;
@@ -415,21 +437,26 @@ for s_idx = 1:4
 end
 
 figure('Name', 'Profil de Performance Mémoire (SANS ILU0)', 'Position', [420 420 800 550]);
-h_lines = zeros(1, 4);
+h_legend = zeros(1, 4);
 for s_idx = 1:4
     % Ligne continue
-    h_lines(s_idx) = plot(tau_vals_no_ilu0, profile_no_ilu0(:,s_idx), 'Color', colors(s_idx,:), ...
+    plot(tau_vals_no_ilu0, profile_no_ilu0(:,s_idx), 'Color', colors(s_idx,:), ...
          'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
     % Marqueurs clairsemés
     marker_indices = round(linspace(1, length(tau_vals_no_ilu0), 15));
     plot(tau_vals_no_ilu0(marker_indices), profile_no_ilu0(marker_indices, s_idx), ...
          markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
          'MarkerSize', 11 - 2*s_idx, 'LineStyle', 'none');
+    % Handle factice pour la légende avec marqueur
+    h_legend(s_idx) = plot(NaN, NaN, 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx), ...
+         'Marker', markers{s_idx}(end), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*s_idx);
 end
 xlabel('Facteur de surcoût mémoire toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Efficacité Mémoire (SANS ILU0)');
-legend(h_lines, solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_legend, solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals_no_ilu0)]);
 
 % --- Profil de Performance Mémoire (AVEC ILU0) ---
@@ -451,21 +478,26 @@ for s_idx = 1:n_solvers
 end
 
 figure('Name', 'Profil de Performance Mémoire', 'Position', [450 450 800 550]);
-h_lines = zeros(1, n_solvers);
+h_legend = zeros(1, n_solvers);
 for s_idx = 1:n_solvers
     % Ligne continue
-    h_lines(s_idx) = plot(tau_vals, profile(:,s_idx), 'Color', colors(s_idx,:), ...
+    plot(tau_vals, profile(:,s_idx), 'Color', colors(s_idx,:), ...
          'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
     % Marqueurs clairsemés
     marker_indices = round(linspace(1, length(tau_vals), 15));
     plot(tau_vals(marker_indices), profile(marker_indices, s_idx), ...
          markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
          'MarkerSize', 11 - 2*min(s_idx, 4), 'LineStyle', 'none');
+    % Handle factice pour la légende avec marqueur
+    h_legend(s_idx) = plot(NaN, NaN, 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx), ...
+         'Marker', markers{s_idx}(end), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*min(s_idx, 4));
 end
 xlabel('Facteur de surcoût mémoire toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Efficacité Mémoire');
-legend(h_lines, solver_names, 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_legend, solver_names, 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals)]);
 
 % --- Profil de Performance Itérations (SANS ILU0) ---
@@ -487,21 +519,26 @@ for s_idx = 1:4
 end
 
 figure('Name', 'Profil de Performance Itérations (SANS ILU0)', 'Position', [480 480 800 550]);
-h_lines = zeros(1, 4);
+h_legend = zeros(1, 4);
 for s_idx = 1:4
     % Ligne continue
-    h_lines(s_idx) = plot(tau_vals_iters_no_ilu0, profile_iters_no_ilu0(:,s_idx), 'Color', colors(s_idx,:), ...
+    plot(tau_vals_iters_no_ilu0, profile_iters_no_ilu0(:,s_idx), 'Color', colors(s_idx,:), ...
          'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
     % Marqueurs clairsemés
     marker_indices = round(linspace(1, length(tau_vals_iters_no_ilu0), 15));
     plot(tau_vals_iters_no_ilu0(marker_indices), profile_iters_no_ilu0(marker_indices, s_idx), ...
          markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
          'MarkerSize', 11 - 2*s_idx, 'LineStyle', 'none');
+    % Handle factice pour la légende avec marqueur
+    h_legend(s_idx) = plot(NaN, NaN, 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx), ...
+         'Marker', markers{s_idx}(end), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*s_idx);
 end
 xlabel('Facteur de surcoût en itérations toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Robustesse / Itérations (SANS ILU0)');
-legend(h_lines, solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_legend, solver_names(1:4), 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals_iters_no_ilu0)]);
 
 % --- Profil de Performance Itérations (AVEC ILU0) ---
@@ -523,19 +560,24 @@ for s_idx = 1:n_solvers
 end
 
 figure('Name', 'Profil de Performance Itérations', 'Position', [500 500 800 550]);
-h_lines = zeros(1, n_solvers);
+h_legend = zeros(1, n_solvers);
 for s_idx = 1:n_solvers
     % Ligne continue
-    h_lines(s_idx) = plot(tau_vals_iters, profile_iters(:,s_idx), 'Color', colors(s_idx,:), ...
+    plot(tau_vals_iters, profile_iters(:,s_idx), 'Color', colors(s_idx,:), ...
          'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx)); hold on;
     % Marqueurs clairsemés
     marker_indices = round(linspace(1, length(tau_vals_iters), 15));
     plot(tau_vals_iters(marker_indices), profile_iters(marker_indices, s_idx), ...
          markers{s_idx}(end), 'Color', colors(s_idx,:), 'MarkerFaceColor', colors(s_idx,:), ...
          'MarkerSize', 11 - 2*min(s_idx, 4), 'LineStyle', 'none');
+    % Handle factice pour la légende avec marqueur
+    h_legend(s_idx) = plot(NaN, NaN, 'Color', colors(s_idx,:), ...
+         'LineStyle', linestyles{s_idx}, 'LineWidth', linewidths(s_idx), ...
+         'Marker', markers{s_idx}(end), 'MarkerFaceColor', colors(s_idx,:), ...
+         'MarkerSize', 11 - 2*min(s_idx, 4));
 end
 xlabel('Facteur de surcoût en itérations toléré (\tau)');
 ylabel('Fraction des matrices résolues avec succès');
 title('Profil de Performance : Robustesse / Itérations');
-legend(h_lines, solver_names, 'Location', 'southeast', 'Interpreter', 'none');
+legend(h_legend, solver_names, 'Location', 'southeast', 'Interpreter', 'none');
 ylim([0 1.05]); xlim([1 max(tau_vals_iters)]);

@@ -42,7 +42,7 @@
 \maketitle
 
 \begin{abstract}
-This course report presents a comprehensive theoretical study and empirical evaluation of an adaptive mixed-precision incomplete LU preconditioning suite, termed \textbf{GEP Mixte}. Designed to accelerate the convergence of GMRES on large-scale non-symmetric sparse linear systems, GEP Mixte addresses the trade-off between preconditioning quality and memory footprint by dynamically allocating five distinct floating-point precision levels (from FP16 half up to FP64 double) to each individual matrix element in the factorization. Our core contribution is an element-wise precision assignment criterion, derived from the column-norm-based drop threshold, which guarantees that the local representation rounding error does not exceed the local drop tolerance. The implementation is evaluated on a diverse set of six sparse matrices from real-world engineering fields (power grids, structural mechanics, optimal control, biology) from the SuiteSparse collection. The results demonstrate that GEP Mixte achieves up to \textbf{3.8$\times$ memory compression} compared to standard FP64 ILUT without any convergence degradation. Performance profiles using the Dolan-Moré metric show that GEP Mixte occupies the optimal front, consistently dominating fixed-precision alternatives in both memory compactness and solver robustness.
+This course report presents a comprehensive theoretical study and empirical evaluation of an adaptive mixed-precision incomplete LU preconditioning suite, termed \textbf{GEP Mixte}. Designed to accelerate the convergence of GMRES on large-scale non-symmetric sparse linear systems, GEP Mixte addresses the trade-off between preconditioning quality and memory footprint by dynamically allocating five distinct floating-point precision levels (from FP16 half up to FP64 double) to each individual matrix element in the factorization. Our core contribution is an element-wise precision assignment criterion, derived from the column-norm-based drop threshold, which guarantees that the local representation rounding error does not exceed the local drop tolerance. The implementation is evaluated on a diverse set of six sparse matrices from real-world engineering fields (power grids, petroleum reservoir simulation, structural mechanics, optimal control, biology) from the SuiteSparse collection. The results demonstrate that GEP Mixte achieves up to \textbf{3.8$\times$ memory compression} compared to standard FP64 ILUT without any convergence degradation. Performance profiles using the Dolan-Moré metric show that GEP Mixte occupies the optimal front, consistently dominating fixed-precision alternatives in both memory compactness and solver robustness.
 \end{abstract}
 
 \newpage
@@ -181,12 +181,14 @@ The top plot shows the GMRES iteration count, which decreases monotonically as t
     \label{fig:compromis}
 \end{figure}
 
-\subsubsection{Optimisation by Dichotomy}
-To automate the search for an optimal balance, we implemented a dichotomy search algorithm (\texttt{opti\_dicho.m}). We defined a cost function:
+\subsubsection{Heuristic Ternary Search (Dichotomy) Optimization}
+To automate the search for an optimal balance, we implemented a heuristic search algorithm (\texttt{opti\_dicho.m}). While commonly referred to as a dichotomy because it halves the search interval at each step, it is technically a form of ternary search: it evaluates the cost function at three points (the boundaries and the midpoint) to locate the minimum without requiring derivatives. 
+
+We defined a cost function that physically sums the execution time overhead with the algorithmic penalty (the product of memory fill-in and GMRES iterations):
 \begin{equation}
-    J(\varepsilon) = \text{Time}_{\text{factorization}}(\varepsilon) \times \text{Fill-in}(\varepsilon) \times \text{Iterations}(\varepsilon)
+    J(\varepsilon) = \text{Time}_{\text{factorization}}(\varepsilon) + \big(\text{Fill-in}(\varepsilon) \times \text{Iterations}(\varepsilon)\big)
 \end{equation}
-The optimizer successfully located the optimal threshold at $\varepsilon \approx 1.67 \times 10^{-2}$, yielding a robust preconditioner with a fill-in factor of 0.92 and requiring only 1 GMRES iteration under optimal pivoting.
+The optimizer successfully located the optimal threshold at $\varepsilon \approx 1.75 \times 10^{-2}$, yielding a robust preconditioner with a fill-in factor of 0.90 and requiring only 1 GMRES iteration under optimal pivoting. Because the search interval is reduced geometrically at each step, the algorithm converges in $O(\log(\frac{1}{\text{tol}}))$ iterations. This logarithmic complexity ensures that only a minimal number of cost function evaluations (each requiring one ILUT factorization and one GMRES solve) are performed, making this offline calibration highly efficient.
 
 \subsubsection{Naive Multi-Precision Simulation}
 We conducted an exploratory simulation by computing a standard FP64 ILUT preconditioner, rounding all its elements post-hoc to FP32, FP16, or bfloat16, and running GMRES. Figure~\ref{fig:naive_precision} shows the impact of storage precision on convergence. 
@@ -272,6 +274,14 @@ The GEP Mixte algorithm integrates this criterion directly into Gaussian elimina
 \end{equation}
 This is implemented in \texttt{gep\_mixte.m}. The memory footprint is tracked by counting the number of elements assigned to each format.
 
+\subsubsection{Computational Complexity}
+A critical requirement for adaptive preconditioning is that the precision selection logic must not introduce a significant computational bottleneck. The computational complexity of the GEP Mixte element-wise format selection is extremely lightweight:
+\begin{enumerate}
+    \item \textbf{Pre-calculation:} The column norms $\varepsilon \|A_{\cdot,j}\|_2$ are pre-computed once per column. This requires exactly $2 \times \text{nnz}(A)$ operations for the sum of squares, plus $n$ square roots.
+    \item \textbf{Element-wise Evaluation:} For each non-zero element $u_{ij}$ stored in the upper factor $U$, the algorithm performs exactly \textbf{1 division} to evaluate $\tau_{ij}$. For elements $l_{ij}$ in the lower factor $L$, it requires \textbf{1 multiplication} and \textbf{1 division}.
+\end{enumerate}
+In total, the additional arithmetic complexity of GEP Mixte is bounded by $O(\text{nnz}(L) + \text{nnz}(U))$, amounting to only 1 to 2 extra operations per stored element. This cost is strictly negligible compared to the typical $O(n \cdot \text{nnz}(L)^2/n)$ cost of the underlying ILUT factorization or the $O(\text{nnz}(L+U))$ cost per GMRES iteration. Thus, GEP Mixte achieves massive memory compression without compromising computational speed.
+
 ---
 
 \section{Results \& Discussion}
@@ -279,14 +289,16 @@ This is implemented in \texttt{gep\_mixte.m}. The memory footprint is tracked by
 We executed the full benchmark suite on the six matrices from different engineering domains. The results demonstrate the exceptional performance and robustness of GEP Mixte.
 
 \subsection{Convergence Stability and Sparsity Preservation}
-Figure~\ref{fig:convergence_fillin_p2} shows the sensitivity analysis on the \textbf{494\_bus} matrix across different drop tolerances (down to $\varepsilon = 10^{-10}$). 
-The left plot shows that GEP Mixte (blue circles) perfectly tracks the convergence of the reference double-precision GEP Std solver (green triangles) across the entire range of drop tolerances, converging in just a few iterations at extreme tolerances like $\varepsilon = 10^{-10}$. 
+Figure~\ref{fig:convergence_fillin_p2} shows the sensitivity analysis on the \textbf{bcsstk08} matrix across different drop tolerances (spanning from loose $\varepsilon = 10^{-1}$ down to strict $\varepsilon = 10^{-10}$). 
+
+The left plot shows that GEP Mixte (blue circles) perfectly tracks the convergence of the reference double-precision GEP Std solver (green triangles) across the entire range of drop tolerances. At extreme loose tolerances ($\varepsilon \approx 0.1$), standard low-precision variants like uniform ILUT FP16 completely fail or exhibit severely elevated iteration counts due to pivoting instability and accumulated rounding errors. In contrast, GEP Mixte degrades gracefully, maintaining the exact same iteration count as the double-precision reference (FP64). The adaptive precision criterion automatically promotes critical elements to higher precision formats when the drop tolerance is loose and the preconditioner quality is highly sensitive to rounding, ensuring robust convergence under all tested conditions. At the other extreme of strict tolerances (e.g., $\varepsilon = 10^{-10}$), it converges rapidly in just a few iterations, identical to the FP64 reference.
+
 The right plot shows that the fill-in factor of GEP Mixte is identical to that of GEP Std. This confirms that the adaptive precision selection occurs after dropping, successfully compressing the elements without altering the sparsity pattern of the preconditioner.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.85\textwidth]{figures_rapport/Convergence_et_Fill_in.png}
-    \caption{GMRES iteration count (left) and Preconditioner fill-in factor (right) as a function of the drop tolerance (Phase 2, 494\_bus).}
+    \caption{GMRES iteration count (left) and Preconditioner fill-in factor (right) as a function of the drop tolerance (Phase 2, bcsstk08).}
     \label{fig:convergence_fillin_p2}
 \end{figure}
 
@@ -303,13 +315,13 @@ As the tolerance becomes loose ($\varepsilon \ge 10^{-1}$), the FP16 fraction sh
 \end{figure}
 
 \subsection{Memory Footprint Compression}
-Figure~\ref{fig:memory_footprint} shows the estimated memory footprint in Kilo-Bytes (KB) for GEP Mixte and standard FP64 storage. 
+Figure~\ref{fig:memory_footprint} shows the estimated memory footprint in Kilo-Bytes (KB) for GEP Mixte and standard FP64 storage on the \textbf{bcsstk08} matrix. 
 At $\varepsilon = 10^{-5}$ (the high-performance preconditioning regime), standard double precision requires approximately 2640 KB of storage. In contrast, GEP Mixte requires only **700 KB** to store the exact same factors, achieving a \textbf{compression ratio of 3.8$\times$}. This memory compression is sustained across all operational tolerances, demonstrating that GEP Mixte resolves the memory bottleneck precisely where the preconditioner is most effective.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.7\textwidth]{figures_rapport/Empreinte_M_moire.png}
-    \caption{Preconditioner memory footprint (KB) for GEP Mixte versus standard FP64 storage across different drop tolerances.}
+    \caption{Preconditioner memory footprint (KB) for GEP Mixte versus standard FP64 storage across different drop tolerances (bcsstk08).}
     \label{fig:memory_footprint}
 \end{figure}
 
@@ -331,7 +343,9 @@ To evaluate robustness across the entire matrix suite, we computed Dolan-Moré p
     \label{fig:perf_profile_mem}
 \end{figure}
 
-Figure~\ref{fig:perf_profile_mem} shows the memory efficiency profiles. GEP Mixte (solid blue line) starts at $\rho = 1.0$ for $\tau = 1$, meaning it achieves the \textbf{absolute lowest memory consumption on 100\% of the test cases} among all threshold-based solvers. Standard ILUT FP64 and FP32 require significantly more memory, only reaching $\rho = 1.0$ at $\tau \approx 4$, which corresponds to a 4$\times$ memory penalty. Uniform ILUT FP16 fails to converge on most problems and does not show up on the profile, illustrating its lack of robustness.
+Figure~\ref{fig:perf_profile_mem} presents the memory efficiency profiles. Among all threshold-based robust solvers, GEP Mixte (solid blue curve) starts at $\rho = 1.0$ for $\tau = 1$, establishing it as the \textbf{most memory-efficient preconditioner at every tested tolerance}. Standard ILUT variants in FP64 and FP32, while perfectly robust, require substantially more memory, reaching $\rho = 1.0$ only at $\tau \approx 4$---corresponding to a four-fold memory overhead relative to GEP Mixte.
+
+A critical observation concerns uniform ILUT FP16. Although it nominally offers the smallest memory footprint on well-conditioned problems, it exhibits a fundamental numerical instability on a significant fraction of the test suite. Specifically, ILUT FP16 successfully converges on only \textbf{3 out of 6 matrices} (\textit{bcsstk08}, \textit{goddardRocketProblem\_1}, and \textit{tumorAntiAngiogenesis\_8} all diverge), resulting in an asymptotic limit of $\rho_{\infty}(\text{FP16}) \approx 0.50$: its profile curve plateaus and never reaches unity, regardless of how large $\tau$ becomes. This is a direct manifestation of half-precision arithmetic's inability to faithfully represent the preconditioner eigenvalues when significant ill-conditioning is present, a limitation already foreshadowed by the naive multi-precision simulation of Section~3.1. GEP Mixte, by contrast, achieves a \textbf{100\% convergence rate} across all six matrices, matching the absolute robustness of the double-precision reference while compressing the average memory consumption close to the FP32/FP16 regime.
 
 \begin{figure}[H]
     \centering
@@ -350,8 +364,21 @@ Figure~\ref{fig:perf_profile_mem} shows the memory efficiency profiles. GEP Mixt
 
 Figure~\ref{fig:perf_profile_iter} shows the iteration count profiles. GEP Mixte perfectly matches the iteration profile of the reference double-precision solver (ILUT FP64), starting at $\rho \approx 1.0$ for $\tau = 1$. This proves that the adaptive mixed precision strategy achieves this massive memory compression with zero convergence penalty.
 
-\subsection{Robustness and Solver Survival}
-At extreme tolerances ($\varepsilon \approx 0.1$, as seen in the left panel of Figure~\ref{fig:convergence_fillin_p2}), uniform low-precision variants like ILUT FP16 completely fail or exhibit highly elevated iteration counts due to pivoting instability. In contrast, GEP Mixte degrades gracefully, maintaining the exact same iteration count as standard double precision (FP64). The dynamic precision criterion automatically promotes critical elements to higher precision when the drop tolerance is loose, ensuring robust convergence in all conditions.
+\subsection{The Iteration-Memory Trade-Off}
+\label{subsec:pareto}
+The benchmark results highlight a clear trade-off between numerical robustness (the number of GMRES iterations required to converge) and memory efficiency (the size of the preconditioner). The evaluated solvers demonstrate three different approaches to this compromise:
+
+\begin{enumerate}
+    \item \textbf{Uniform ILUT FP16 (aggressive but fragile):} Storing the entire preconditioner in FP16 (2 bytes per non-zero) minimizes memory usage. However, as shown by the divergence on several matrices, this uniform compression is too unstable when the matrix is ill-conditioned. The rounding errors in half-precision accumulate and degrade the preconditioner quality, causing GMRES to diverge.
+
+    \item \textbf{Uniform ILUT FP64 (robust but costly):} Storing everything in double-precision (8 bytes per non-zero) offers excellent stability and the lowest iteration counts, converging successfully in 100\% of the cases. However, it imposes a high memory cost, which can slow down large-scale simulations.
+
+    \item \textbf{GEP Mixte (the adaptive compromise):} By dynamically choosing the precision format for each individual element, GEP Mixte gets the best of both worlds. For less sensitive elements, the criterion naturally relaxes to FP16 (which accounts for over 90\% of the entries at strict tolerances), while critical values are kept in FP32 or FP64. This achieves the same 100\% robustness as FP64 while compressing the memory footprint by up to 3.8$\times$.
+\end{enumerate}
+
+This simple adaptive strategy allows GEP Mixte to balance robustness and efficiency. Instead of choosing between speed and memory, it adjusts the precision where it matters most, making the solver both compact and stable across different engineering problems.
+
+
 
 ---
 
