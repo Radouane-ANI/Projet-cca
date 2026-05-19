@@ -210,7 +210,7 @@ While single precision (FP32) perfectly tracks the double precision curve, half 
 \subsection{Phase 2: Mathematical Derivation and the GEP Mixte Algorithm}
 To prevent the low-precision instability observed in Phase 1, we developed a mathematical criterion to assign precision element-by-element. 
 
-\subsubsection{Derivation of the Mixed-Precision Criterion (\texttt{preuve\_arrondi.pdf} \& \texttt{arrondi\_complet.pdf})}
+\subsubsection{Derivation of the Mixed-Precision Criterion}
 
 The global error of the preconditioner decomposes as:
 \begin{equation}
@@ -248,7 +248,7 @@ However, the \emph{effective} error on the reconstructed product $\hat{L}\hat{U}
     |E_{ij}^{\text{round}}| \le \varepsilon\|A_{\cdot,j}\|_2
 \end{equation}
 
-\textbf{Conclusion -- Unified element-wise precision criterion} (\texttt{preuve\_arrondi.pdf} \& \texttt{arrondi\_complet.pdf}):
+\textbf{Conclusion -- Unified element-wise precision criterion}
 \begin{equation}\label{eq:unified_criterion}
     \boxed{
     \mu_{ij} \le \begin{cases}
