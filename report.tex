@@ -110,17 +110,41 @@ With the advent of deep learning and specialized hardware (such as Tensor Cores 
 
 However, these approaches apply a \textbf{uniform} precision to the entire factorization. If a matrix is highly ill-conditioned, uniform FP16 factorization fails due to underflow, overflow, or severe rounding errors. 
 
-\subsection{Theoretical Foundations of Local Dropping Errors}
-The theoretical foundation of threshold dropping lies in local error analysis. Let $L$ and $U$ be the exact factors, and $\hat{L}$, $\hat{U}$ be the incomplete factors computed by ILUT, such that:
-\begin{equation}
-    \hat{L}\hat{U} = A + E
-\end{equation}
-where $E$ is the error matrix. For any element $(i,j)$ that is dropped, the local contribution to $E_{ij}$ is bounded. 
-As detailed in the proof file \texttt{preuve.pdf}, the local error for a dropped element is:
+\subsection{Theoretical Foundations of Local Dropping Errors (\texttt{preuve.pdf})}%
+\label{sec:dropping_bound}
+
+The theoretical foundation of threshold dropping lies in local error analysis. Let $\hat{L}$, $\hat{U}$ be the incomplete factors computed by ILUT, such that $\hat{L}\hat{U} = A + E$, where $E$ is the error matrix. The following theorem, proved in \texttt{preuve.pdf}, establishes the key bound.
+
+\textbf{Theorem.} \textit{For any element $(i,j)$ dropped during ILUT elimination, the local error satisfies:}
 \begin{equation}
     |E_{ij}| \le \varepsilon \|A_{\cdot,j}\|_2
 \end{equation}
-This bound holds for both $U$-rejection (where the element in the upper factor is zeroed) and $L$-rejection (where the multiplier in the lower factor is zeroed). This rigorous result forms the basis of our mixed-precision allocation policy: if we tolerate an error of magnitude $\varepsilon \|A_{\cdot,j}\|_2$ by dropping elements, we should be able to tolerate a comparable rounding error of magnitude $|x_{ij}|\mu_{ij}$ on the elements that we *do* keep, where $\mu_{ij}$ is the unit of rounding of the chosen storage precision.
+
+\textbf{Proof.} Let $v_{ij}$ denote the updated value of element $(i,j)$ just before the drop decision, i.e.:
+\begin{equation}
+    v_{ij} = a_{ij} - \sum_{k=1}^{\min(i,j)-1} \hat{l}_{ik}\hat{u}_{kj}
+\end{equation}
+
+\textit{Case 1 -- Element dropped from $U$ ($i \le j$):} Here $\min(i,j) = i$ and $\hat{l}_{ii} = 1$. The algorithm sets $\hat{u}_{ij} = 0$ whenever $|v_{ij}| \le \varepsilon\|A_{\cdot,j}\|_2$. Expanding the error:
+\begin{align}
+    E_{ij} &= (\hat{L}\hat{U})_{ij} - a_{ij} = \sum_{k=1}^{i-1}\hat{l}_{ik}\hat{u}_{kj} + \underbrace{\hat{l}_{ii}}_{=1}\underbrace{\hat{u}_{ij}}_{=0} - a_{ij} \\
+    &= -\left(a_{ij} - \sum_{k=1}^{i-1}\hat{l}_{ik}\hat{u}_{kj}\right) = -v_{ij}
+\end{align}
+The drop condition gives directly:
+\begin{equation}
+    |E_{ij}| = |v_{ij}| \le \varepsilon\|A_{\cdot,j}\|_2
+\end{equation}
+
+\textit{Case 2 -- Element dropped from $L$ ($i > j$):} Here $\min(i,j) = j$. The multiplier $m_{ij} = v_{ij}/\hat{u}_{jj}$ is dropped when $|m_{ij}| \le \frac{\varepsilon\|A_{\cdot,j}\|_2}{|\hat{u}_{jj}|}$. Setting $\hat{l}_{ij} = 0$:
+\begin{align}
+    E_{ij} &= \sum_{k=1}^{j-1}\hat{l}_{ik}\hat{u}_{kj} + \underbrace{\hat{l}_{ij}}_{=0}\hat{u}_{jj} - a_{ij} = -v_{ij}
+\end{align}
+The drop condition gives $|m_{ij}|\cdot|\hat{u}_{jj}| \le \varepsilon\|A_{\cdot,j}\|_2$, i.e. $\frac{|v_{ij}|}{|\hat{u}_{jj}|}\cdot|\hat{u}_{jj}| = |v_{ij}| \le \varepsilon\|A_{\cdot,j}\|_2$, hence:
+\begin{equation}
+    |E_{ij}| = |v_{ij}| \le \varepsilon\|A_{\cdot,j}\|_2 \qquad \square
+\end{equation}
+
+This result forms the basis of our mixed-precision allocation policy: since we already tolerate a local error of magnitude $\varepsilon\|A_{\cdot,j}\|_2$ by dropping elements, we can similarly tolerate a rounding error of the same order on the elements we retain.
 
 ---
 
@@ -186,35 +210,54 @@ While single precision (FP32) perfectly tracks the double precision curve, half 
 \subsection{Phase 2: Mathematical Derivation and the GEP Mixte Algorithm}
 To prevent the low-precision instability observed in Phase 1, we developed a mathematical criterion to assign precision element-by-element. 
 
-\subsubsection{Derivation of the Precision Criterion (from \texttt{preuve\_arrondi.pdf})}
-Let $x_{ij}$ be the exact value of an element computed during the incomplete LU process. If $|x_{ij}| < \varepsilon \|A_{\cdot,j}\|_2$, the element is dropped. If it is kept, we store it in a representation format with unit of rounding $\mu_{ij}$, yielding the stored value:
-\begin{equation}
-    \hat{x}_{ij} = x_{ij}(1 + \delta_{ij}), \quad |\delta_{ij}| \le \mu_{ij}
-\end{equation}
-The absolute rounding error introduced is:
-\begin{equation}
-    |E_{ij}^{\text{round}}| = |\hat{x}_{ij} - x_{ij}| = |x_{ij} \delta_{ij}| \approx |\hat{x}_{ij}| \mu_{ij}
-\end{equation}
-To ensure that this rounding error does not degrade the preconditioner, we impose that it must be smaller than the maximum error we already tolerated by dropping elements in that same column:
-\begin{equation}
-    |E_{ij}^{\text{round}}| \le \varepsilon \|A_{\cdot,j}\|_2 \implies |\hat{x}_{ij}| \mu_{ij} \le \varepsilon \|A_{\cdot,j}\|_2
-\end{equation}
-This yields the fundamental element-wise precision criterion:
-\begin{equation}
-    \mu_{ij} \le \tau_{ij} \quad \text{where} \quad \tau_{ij} = \frac{\varepsilon \|A_{\cdot,j}\|_2}{|\hat{x}_{ij}|}
-\end{equation}
-This ratio $\tau_{ij}$ represents the maximum allowable unit of rounding for element $(i,j)$. 
+\subsubsection{Derivation of the Mixed-Precision Criterion (\texttt{preuve\_arrondi.pdf} \& \texttt{arrondi\_complet.pdf})}
 
-\subsubsection{Distinction between $L$ and $U$ (from \texttt{arrondi\_complet.pdf})}
-For elements of the upper factor $U$, the element value $\hat{u}_{ij}$ is used directly in the criterion:
+The global error of the preconditioner decomposes as:
 \begin{equation}
-    \mu_{ij} \le \frac{\varepsilon \|A_{\cdot,j}\|_2}{|\hat{u}_{ij}|} \quad (i \le j)
+    A = \hat{L}\hat{U} + E^{\text{drop}} + E^{\text{round}}
 \end{equation}
-For elements of the lower factor $L$, the entry is a multiplier $l_{ij}$. However, in the reconstituted matrix product $\hat{L}\hat{U}$, this multiplier is scaled by the corresponding pivot $u_{jj}$. The effective rounding error on the product is $|l_{ij} u_{jj}| \mu_{ij}$. To preserve the preconditioning quality, we must scale the budget accordingly:
+where $E^{\text{drop}}$ arises from the ILUT dropping rule and $E^{\text{round}}$ from storing retained elements in finite-precision formats. Our goal is to choose the precision $\mu_{ij}$ of each retained element so that $E^{\text{round}}$ does not exceed what is already tolerated by $E^{\text{drop}}$.
+
+\textbf{Step 1 -- Drop error budget.} For any element dropped from column $j$ (either $\hat{u}_{ij}=0$ or $\hat{l}_{ij}=0$), the bound proved in Section~\ref{sec:dropping_bound} gives:
 \begin{equation}
-    \mu_{ij} \le \frac{\varepsilon \|A_{\cdot,j}\|_2}{|l_{ij} u_{jj}|} \quad (i > j)
+    |E_{ij}^{\text{drop}}| \le \varepsilon\|A_{\cdot,j}\|_2
 \end{equation}
-This critical distinction ensures that the rounding of multipliers is properly constrained in columns with very large or very small pivots.
+This quantity $\varepsilon\|A_{\cdot,j}\|_2$ is the \emph{error budget} of column $j$: the maximum local perturbation already accepted by the algorithm.
+
+\textbf{Step 2 -- Rounding error model.} A retained element $x_{ij}$ stored in a format with unit of rounding $\mu_{ij}$ satisfies:
+\begin{equation}
+    \hat{x}_{ij} = \mathrm{fl}_{\mu_{ij}}(x_{ij}) = x_{ij}(1+\delta_{ij}), \quad |\delta_{ij}| \le \mu_{ij}
+\end{equation}
+The local rounding error is $E_{ij}^{\text{round}} = x_{ij}\delta_{ij}$, hence $|E_{ij}^{\text{round}}| \le |\hat{x}_{ij}|\,\mu_{ij}$.
+However, the \emph{effective} error on the reconstructed product $\hat{L}\hat{U}$ differs between $U$ and $L$ entries, because a rounding error on a multiplier $l_{ij}$ is amplified by the pivot $u_{jj}$:
+
+\begin{itemize}
+    \item \textbf{Element $u_{ij} \in U$ ($i \le j$):} $\hat{u}_{ij}$ enters $\hat{L}\hat{U}$ directly, so the effective error is:
+    \begin{equation}
+        |E_{ij}^{\text{round}}| = |\hat{u}_{ij} - u_{ij}| = |u_{ij}||\delta_{ij}| \le |u_{ij}|\,\mu_{ij}
+    \end{equation}
+
+    \item \textbf{Multiplier $l_{ij} \in L$ ($i > j$):} $\hat{l}_{ij}$ is scaled by the pivot $u_{jj}$ in the product, so the effective error on entry $(i,j)$ of $\hat{L}\hat{U}$ is:
+    \begin{equation}
+        |E_{ij}^{\text{round}}| = |(\hat{l}_{ij} - l_{ij})\,u_{jj}| = |l_{ij}\,\delta_{ij}\,u_{jj}| \le |l_{ij}\,u_{jj}|\,\mu_{ij}
+    \end{equation}
+\end{itemize}
+
+\textbf{Step 3 -- Preservation constraint.} We impose that the effective rounding error does not exceed the column's error budget:
+\begin{equation}
+    |E_{ij}^{\text{round}}| \le \varepsilon\|A_{\cdot,j}\|_2
+\end{equation}
+
+\textbf{Conclusion -- Unified element-wise precision criterion} (\texttt{preuve\_arrondi.pdf} \& \texttt{arrondi\_complet.pdf}):
+\begin{equation}\label{eq:unified_criterion}
+    \boxed{
+    \mu_{ij} \le \begin{cases}
+        \dfrac{\varepsilon\|A_{\cdot,j}\|_2}{|u_{ij}|}         & \text{if } i \le j \quad (\text{matrix } U) \\[10pt]
+        \dfrac{\varepsilon\|A_{\cdot,j}\|_2}{|l_{ij}\,u_{jj}|} & \text{if } i > j  \quad (\text{matrix } L)
+    \end{cases}
+    }
+\end{equation}
+The intuition is immediate: the larger the retained element relative to the column budget, the smaller $\mu_{ij}$ must be, requiring higher precision. An element just above the drop threshold yields $\mu_{ij} \approx 1$, allowing FP16 storage. A dominant element far from the threshold demands $\mu_{ij} \ll 1$, imposing FP64. For $L$ entries, the factor $|u_{jj}|$ in the denominator correctly accounts for the amplification of multiplier rounding errors by the pivot before they affect the reconstructed factorization.
 
 \subsubsection{The GEP Mixte Algorithm}
 The GEP Mixte algorithm integrates this criterion directly into Gaussian elimination with threshold pivoting. For each entry, we compute the target $\tau_{ij}$ and compare it against the units of rounding of our formats:
