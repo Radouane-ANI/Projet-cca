@@ -32,9 +32,10 @@
 \lhead{R. Aouini \& S. Hbabou}
 \cfoot{\thepage}
 
-\title{\textbf{Mixed-Precision Incomplete LU Factorization for Large Sparse Linear Systems: From Exploratory Analysis to Adaptive Preconditioning}\\
-\large\textit{CCA Course Report -- Academic Year 2025-2026}}
-\author{\textbf{Radouane Aouini et Hbabou Sami}}
+\title{\textbf{Incomplete Factorizations of Sparse Matrices in Mixed Precision}\\
+\large\textit{CCA Course Report -- Under the Supervision of Théo Mary (LIP6)}\\
+\large\textit{Academic Year 2025-2026}}
+\author{\textbf{Radouane Aouini et Sami Hbabou}}
 \date{\today}
 
 \begin{document}
@@ -158,8 +159,8 @@ The exploratory phase used the structural mechanics matrix \textbf{bcsstk08} ($n
 \subsubsection{Preliminary Sweep}
 We performed an initial sweep of five drop tolerances $\varepsilon \in \{0.2, 0.1, 10^{-2}, 10^{-3}, 10^{-4}\}$ with standard ILUT using GMRES. Figure~\ref{fig:prelim_ilu} presents the convergence history. We observe that:
 \begin{itemize}
-    \item A drop tolerance of $\varepsilon = 0.2$ requires 52 GMRES iterations to converge.
-    \item A drop tolerance of $\varepsilon = 10^{-4}$ converges extremely rapidly in just 9 iterations.
+    \item A drop tolerance of $\varepsilon = 0.2$ requires 53 GMRES iterations to converge.
+    \item A drop tolerance of $\varepsilon = 10^{-4}$ converges extremely rapidly in just 10 iterations.
     \item Tightening the drop tolerance drastically decreases the iteration count but increases the fill-in factor (ratio of non-zeros in the preconditioner to non-zeros in the original matrix).
 \end{itemize}
 
@@ -304,8 +305,8 @@ The right plot shows that the fill-in factor of GEP Mixte is identical to that o
 
 \subsection{Dynamic Allocation of Precision Formats}
 Figure~\ref{fig:dist_precision} illustrates the percentage of non-zero preconditioner elements assigned to each precision format by GEP Mixte as the drop tolerance $\varepsilon$ is varied. 
-At strict tolerances ($\varepsilon \le 10^{-4}$), \textbf{over 90\% of the elements are stored in FP16 (half precision)}, and the remaining elements are stored in FP32 (single precision). Only a minute fraction of elements requires higher precision. This is because a dense preconditioner contains many small-magnitude elements that are close to the drop threshold, allowing a highly relaxed rounding budget. 
-As the tolerance becomes loose ($\varepsilon \ge 10^{-1}$), the FP16 fraction shrinks, and single precision (FP32) dominates. In this regime, the few retained elements are large-magnitude entries that are far from the drop threshold, demanding tighter rounding bounds. This dynamically changing distribution proves the elegance of the GEP Mixte criterion: it naturally shifts the representation budget to match the exact mathematical needs of the system.
+At strict tolerances ($\varepsilon \le 10^{-4}$), \textbf{over 90\% of the elements are stored in FP16 (half precision)}, and the remaining elements are stored in the custom FP24 format. Single precision (FP32) is only allocated at even stricter thresholds ($\varepsilon \le 10^{-6}$). This is because a dense preconditioner contains many small-magnitude elements that are close to the drop threshold, allowing a highly relaxed rounding budget. 
+As the tolerance becomes loose ($\varepsilon \ge 10^{-1}$), the FP16 fraction shrinks, and the custom FP24 format dominates. In this regime, the few retained elements are large-magnitude entries that are far from the drop threshold, demanding tighter rounding bounds. This dynamically changing distribution proves the elegance of the GEP Mixte criterion: it naturally shifts the representation budget to match the exact mathematical needs of the system.
 
 \begin{figure}[H]
     \centering
@@ -316,7 +317,7 @@ As the tolerance becomes loose ($\varepsilon \ge 10^{-1}$), the FP16 fraction sh
 
 \subsection{Memory Footprint Compression}
 Figure~\ref{fig:memory_footprint} shows the estimated memory footprint in Kilo-Bytes (KB) for GEP Mixte and standard FP64 storage on the \textbf{bcsstk08} matrix. 
-At $\varepsilon = 10^{-5}$ (the high-performance preconditioning regime), standard double precision requires approximately 2640 KB of storage. In contrast, GEP Mixte requires only **700 KB** to store the exact same factors, achieving a \textbf{compression ratio of 3.8$\times$}. This memory compression is sustained across all operational tolerances, demonstrating that GEP Mixte resolves the memory bottleneck precisely where the preconditioner is most effective.
+At $\varepsilon = 10^{-5}$ (the high-performance preconditioning regime), standard double precision requires approximately 2640 KB of storage. In contrast, GEP Mixte requires only 700 KB to store the exact same factors, achieving a \textbf{compression ratio of 3.8$\times$}. This memory compression is sustained across all operational tolerances, demonstrating that GEP Mixte resolves the memory bottleneck precisely where the preconditioner is most effective.
 
 \begin{figure}[H]
     \centering
@@ -343,7 +344,7 @@ To evaluate robustness across the entire matrix suite, we computed Dolan-Moré p
     \label{fig:perf_profile_mem}
 \end{figure}
 
-Figure~\ref{fig:perf_profile_mem} presents the memory efficiency profiles. Among all threshold-based robust solvers, GEP Mixte (solid blue curve) starts at $\rho = 1.0$ for $\tau = 1$, establishing it as the \textbf{most memory-efficient preconditioner at every tested tolerance}. Standard ILUT variants in FP64 and FP32, while perfectly robust, require substantially more memory, reaching $\rho = 1.0$ only at $\tau \approx 4$---corresponding to a four-fold memory overhead relative to GEP Mixte.
+Figure~\ref{fig:perf_profile_mem} presents the memory efficiency profiles. Among all threshold-based robust solvers, GEP Mixte (solid blue curve) starts at $\rho = 0.50$ for $\tau = 1$ (in the profile excluding ILU(0)), sharing the top spot with uniform ILUT FP16. However, while ILUT FP16 only converges on half of the matrix suite, GEP Mixte converges on 100\% of the cases and reaches $\rho = 1.0$ at a very tight factor of $\tau \approx 1.3$, demonstrating that it remains either the absolute most memory-efficient or within 30\% of it across all matrices. Standard ILUT variants in FP64 and FP32, while perfectly robust, require substantially more memory, reaching $\rho = 1.0$ only at $\tau \approx 4$---corresponding to a four-fold memory overhead relative to GEP Mixte.
 
 A critical observation concerns uniform ILUT FP16. Although it nominally offers the smallest memory footprint on well-conditioned problems, it exhibits a fundamental numerical instability on a significant fraction of the test suite. Specifically, ILUT FP16 successfully converges on only \textbf{3 out of 6 matrices} (\textit{bcsstk08}, \textit{goddardRocketProblem\_1}, and \textit{tumorAntiAngiogenesis\_8} all diverge), resulting in an asymptotic limit of $\rho_{\infty}(\text{FP16}) \approx 0.50$: its profile curve plateaus and never reaches unity, regardless of how large $\tau$ becomes. This is a direct manifestation of half-precision arithmetic's inability to faithfully represent the preconditioner eigenvalues when significant ill-conditioning is present, a limitation already foreshadowed by the naive multi-precision simulation of Section~3.1. GEP Mixte, by contrast, achieves a \textbf{100\% convergence rate} across all six matrices, matching the absolute robustness of the double-precision reference while compressing the average memory consumption close to the FP32/FP16 regime.
 
@@ -362,7 +363,7 @@ A critical observation concerns uniform ILUT FP16. Although it nominally offers 
     \label{fig:perf_profile_iter}
 \end{figure}
 
-Figure~\ref{fig:perf_profile_iter} shows the iteration count profiles. GEP Mixte perfectly matches the iteration profile of the reference double-precision solver (ILUT FP64), starting at $\rho \approx 1.0$ for $\tau = 1$. This proves that the adaptive mixed precision strategy achieves this massive memory compression with zero convergence penalty.
+Figure~\ref{fig:perf_profile_iter} shows the iteration count profiles. GEP Mixte closely matches the iteration profile of the reference double-precision solver (ILUT FP64), starting at $\rho \approx 0.83$ for $\tau = 1$ and reaching $\rho = 1.0$ at $\tau \approx 1.09$. This indicates that GEP Mixte achieves the absolute optimal iteration count on 5 out of 6 matrices, with a negligible maximum iteration overhead of only 9\% on the remaining system. This proves that the adaptive mixed precision strategy achieves this massive memory compression with zero convergence penalty.
 
 \subsection{The Iteration-Memory Trade-Off}
 \label{subsec:pareto}
