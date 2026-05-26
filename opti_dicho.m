@@ -21,7 +21,7 @@ function [results, seuil] = opti_dicho(A, debut, fin, precision)
             resd.flag = 1;
         end
         if resd.flag
-            debut = debut + (fin+debut)*0.1;
+            debut = debut + (fin-debut)*0.1;
             continue;
         end
 

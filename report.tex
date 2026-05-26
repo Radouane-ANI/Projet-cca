@@ -189,7 +189,7 @@ We defined a cost function that physically sums the execution time overhead with
 \begin{equation}
     J(\varepsilon) = \text{Time}_{\text{factorization}}(\varepsilon) + \big(\text{Fill-in}(\varepsilon) \times \text{Iterations}(\varepsilon)\big)
 \end{equation}
-The optimizer successfully located the optimal threshold at $\varepsilon \approx 1.75 \times 10^{-2}$, yielding a robust preconditioner with a fill-in factor of 0.90 and requiring only 1 GMRES iteration under optimal pivoting. Because the search interval is reduced geometrically at each step, the algorithm converges in $O(\log(\frac{1}{\text{tol}}))$ iterations. This logarithmic complexity ensures that only a minimal number of cost function evaluations (each requiring one ILUT factorization and one GMRES solve) are performed, making this offline calibration highly efficient.
+The optimizer successfully located the optimal threshold at $\varepsilon \approx 3.51 \times 10^{-2}$, yielding a robust preconditioner with a fill-in factor of 0.57 and requiring only 4 GMRES iterations under optimal pivoting. Because the search interval is reduced geometrically at each step, the algorithm converges in $O(\log(\frac{1}{\text{tol}}))$ iterations. This logarithmic complexity ensures that only a minimal number of cost function evaluations (each requiring one ILUT factorization and one GMRES solve) are performed, making this offline calibration highly efficient.
 
 \subsubsection{Naive Multi-Precision Simulation}
 We conducted an exploratory simulation by computing a standard FP64 ILUT preconditioner, rounding all its elements post-hoc to FP32, FP16, or bfloat16, and running GMRES. Figure~\ref{fig:naive_precision} shows the impact of storage precision on convergence. 

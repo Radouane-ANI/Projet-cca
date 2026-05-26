@@ -169,7 +169,7 @@
             \begin{itemize}
                 \item Minimisation de $J(\varepsilon) = \text{Time}_{\text{factorisation}}(\varepsilon) + (\text{Fill-in} \times \text{Iter})$.
                 \item Recherche en $O(\log(1/\text{tol}))$.
-                \item Optimum localisé à $\varepsilon \approx 1.75 \times 10^{-2}$ (fill-in $= 0.90$).
+                \item Optimum localisé à $\varepsilon \approx 1.47 \times 10^{-3}$ (fill-in $= 4.04$, 18 itérations).
             \end{itemize}
         \end{column}
         
@@ -256,8 +256,8 @@
                         \item Pour $U$ : 1 division.
                         \item Pour $L$ : 1 multiplication + 1 division.
                     \end{itemize}
-                    \item \textbf{Coût global} : $O(\text{nnz}(L) + \text{nnz}(U))$, soit seulement 1 à 2 flops supplémentaires par élément stocké.
-                    \item \textbf{Totalement négligeable} devant le coût $O(n^3)$ de la factorisation ou de GMRES !
+                    \item \textbf{Coût global} : $O(\text{nnz}(L) + \text{nnz}(U))$, soit seulement 1 à 2 flops par élément stocké.
+                    \item \textbf{Totalement négligeable} devant le coût d'ILUT ($O(\frac{\text{nnz}(L+U)^2}{n})$) et de GMRES ($O(m \cdot \text{nnz}(L+U) + m^2 n)$) !
                 \end{itemize}
             \end{block}
         \end{column}
@@ -270,7 +270,7 @@
         \begin{column}{0.45\textwidth}
             \textbf{Observations :}
             \begin{itemize}
-                \item \textbf{Gauche (Itérations)} : GEP Mixte (courbe bleue) se superpose parfaitement aux itérations du FP64 de référence. Il n'y a \textbf{aucune perte de convergence}, contrairement au FP16 uniforme qui diverge.
+                \item \textbf{Gauche (Itérations)} : GEP Mixte (courbe bleue) suit de très près le FP64 de référence (écart $\le 1$ itération dû au bruit d'arrondi sur les éléments compressés). Il n'y a \textbf{aucune divergence}, contrairement au FP16 uniforme.
                 \item \textbf{Droite (Fill-in)} : Le facteur de remplissage est rigoureusement identique. La sélection du format intervient après le dropping arithmétique, préservant le profil de creux de la matrice.
             \end{itemize}
         \end{column}
