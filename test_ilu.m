@@ -14,10 +14,16 @@ tol = 1e-10; % Tolérance d'arrêt du solveur
 maxit = 200;
 
 try
-    [~, flag, ~, ~, resvec] = gmres(P*A, P*b, [], tol, maxit, L, U);
+    [x, flag, ~, ~, resvec] = gmres(P*A, P*b, [], tol, maxit, L, U);
     results.resvec = resvec;
     results.iterations = length(resvec) - 1;
     results.flag = flag; % 0 = succès, 1 = échec, etc.
+    
+    % Check for spurious convergence (numerical artifact)
+    true_error = norm(x - ones(n, 1)) / norm(ones(n, 1));
+    if true_error > 1e-4
+        results.flag = 1; % Force flag to 1 (failure)
+    end
 catch e
     % Si la factorisation a produit des NaN/Inf, gmres peut crasher
     results.resvec = [];
